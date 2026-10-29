@@ -82,7 +82,8 @@ OPS_NOTE = (
     "case-insensitively, phones by digits only, addresses by their formatted text, "
     "organizations by name, relations by person, custom fields by key, events by date "
     "(YYYY-MM-DD or --MM-DD), nicknames and URLs by trimmed case-insensitive text. A remove "
-    "that matches nothing is an error and nothing is written. name changes only the parts "
+    "that matches nothing is an error and nothing is written. add of an e-mail, phone or URL "
+    "already there with another type changes its type. name changes only the parts "
     "given; birthday and biography replace; clear empties name, birthday or biography."
 )
 
