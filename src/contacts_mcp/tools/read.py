@@ -101,8 +101,7 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
             str | None,
             Field(
                 description=(
-                    'Account alias, or "*" for every account. May be omitted only when '
-                    "exactly one account is configured."
+                    'Account alias, or "*" for every account; omit only if just one is linked.'
                 )
             ),
         ] = None,
