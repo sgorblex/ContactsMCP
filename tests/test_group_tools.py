@@ -17,7 +17,7 @@ from contacts_mcp.errors import InvalidArgumentError, NotFoundError
 from contacts_mcp.logs import AUDIT_LOGGER
 from contacts_mcp.registry import AccountRegistry
 from contacts_mcp.tools.groups import resolve_group
-from tests.conftest import PEOPLE
+from tests.conftest import PEOPLE, person
 from tests.test_write_tools import GROUPS
 
 DUPLICATED: list[dict[str, Any]] = [
@@ -43,6 +43,27 @@ def client(
 def groups_route(google: respx.MockRouter) -> respx.Route:
     return google.get(f"{PEOPLE}/contactGroups").mock(
         return_value=httpx.Response(200, json={"contactGroups": DUPLICATED})
+    )
+
+
+@pytest.fixture(autouse=True)
+def memberships_route(google: respx.MockRouter) -> respx.Route:
+    """Current memberships, read before a membership change; none found by default."""
+    return google.get(f"{PEOPLE}/people:batchGet").mock(
+        return_value=httpx.Response(200, json={"responses": []})
+    )
+
+
+def found(*members: tuple[str, list[str]]) -> httpx.Response:
+    """A batchGet answer: each contact with the groups it is in."""
+    return httpx.Response(
+        200,
+        json={
+            "responses": [
+                {"person": person(rn, groups=groups), "requestedResourceName": rn}
+                for rn, groups in members
+            ]
+        },
     )
 
 
@@ -216,12 +237,113 @@ async def test_add_to_group(
     assert result.structured_content == {
         "group": {"resource_name": "contactGroups/starred", "name": "Starred"},
         "changed": ["people/c1"],
+        "unchanged": [],
         "not_found": ["people/c404"],
         "could_not_remove": [],
     }
     (line,) = [r for r in caplog.records if r.name == "contacts_mcp.audit"]
     assert line.resource_name == "contactGroups/starred"  # type: ignore[attr-defined]
     assert line.contacts == ["people/c1", "people/c404"]  # type: ignore[attr-defined]
+
+
+async def test_add_to_group_reports_contacts_already_in_it(
+    google: respx.MockRouter,
+    memberships_route: respx.Route,
+    client: Client[Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="contacts_mcp.audit")
+    memberships_route.mock(
+        return_value=found(
+            ("people/c1", ["contactGroups/myContacts", "contactGroups/abc123"]),
+            ("people/c2", ["contactGroups/myContacts"]),
+        )
+    )
+    route = google.post(f"{PEOPLE}/contactGroups/abc123/members:modify").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    async with client:
+        result = await client.call_tool(
+            "add_to_group", {"group": "Climbing", "resource_names": ["people/c1", "people/c2"]}
+        )
+    assert json.loads(route.calls.last.request.content) == {"resourceNamesToAdd": ["people/c2"]}
+    assert result.structured_content is not None
+    assert result.structured_content["changed"] == ["people/c2"]
+    assert result.structured_content["unchanged"] == ["people/c1"]
+    (line,) = [r for r in caplog.records if r.name == "contacts_mcp.audit"]
+    assert line.contacts == ["people/c2"]  # type: ignore[attr-defined]
+
+
+async def test_add_to_group_sends_nothing_when_all_are_members(
+    google: respx.MockRouter, memberships_route: respx.Route, client: Client[Any]
+) -> None:
+    memberships_route.mock(return_value=found(("people/c1", ["contactGroups/abc123"])))
+    route = google.post(url__regex=rf"{PEOPLE}/contactGroups/.*/members:modify")
+    async with client:
+        result = await client.call_tool(
+            "add_to_group", {"group": "Climbing", "resource_names": ["people/c1"]}
+        )
+    assert not route.called
+    assert result.structured_content is not None
+    assert result.structured_content["changed"] == []
+    assert result.structured_content["unchanged"] == ["people/c1"]
+
+
+async def test_remove_from_group_reports_contacts_not_in_it(
+    google: respx.MockRouter, memberships_route: respx.Route, client: Client[Any]
+) -> None:
+    memberships_route.mock(
+        return_value=found(
+            ("people/c1", ["contactGroups/myContacts", "contactGroups/abc123"]),
+            ("people/c2", ["contactGroups/myContacts"]),
+        )
+    )
+    route = google.post(f"{PEOPLE}/contactGroups/abc123/members:modify").mock(
+        return_value=httpx.Response(200, json={})
+    )
+    async with client:
+        result = await client.call_tool(
+            "remove_from_group",
+            {"group": "climbing", "resource_names": ["people/c1", "people/c2", "people/c9"]},
+        )
+    # Only the memberships are read, for every contact named.
+    lookup = memberships_route.calls.last.request.url.params
+    assert lookup["personFields"] == "memberships"
+    assert lookup.get_list("resourceNames") == ["people/c1", "people/c2", "people/c9"]
+    # c9 was not returned by batchGet: Google decides whether it exists.
+    assert json.loads(route.calls.last.request.content) == {
+        "resourceNamesToRemove": ["people/c1", "people/c9"]
+    }
+    assert result.structured_content is not None
+    assert result.structured_content["changed"] == ["people/c1", "people/c9"]
+    assert result.structured_content["unchanged"] == ["people/c2"]
+
+
+async def test_remove_from_group_sends_nothing_when_none_are_members(
+    google: respx.MockRouter, memberships_route: respx.Route, client: Client[Any]
+) -> None:
+    memberships_route.mock(return_value=found(("people/c1", ["contactGroups/myContacts"])))
+    route = google.post(url__regex=rf"{PEOPLE}/contactGroups/.*/members:modify")
+    async with client:
+        result = await client.call_tool(
+            "remove_from_group", {"group": "Climbing", "resource_names": ["people/c1"]}
+        )
+    assert not route.called
+    assert result.structured_content is not None
+    assert result.structured_content["unchanged"] == ["people/c1"]
+
+
+async def test_a_failed_membership_lookup_writes_nothing(
+    google: respx.MockRouter, memberships_route: respx.Route, client: Client[Any]
+) -> None:
+    memberships_route.mock(return_value=httpx.Response(404, json={}))
+    route = google.post(url__regex=rf"{PEOPLE}/contactGroups/.*/members:modify")
+    async with client:
+        with pytest.raises(ToolError):
+            await client.call_tool(
+                "add_to_group", {"group": "Climbing", "resource_names": ["people/c1"]}
+            )
+    assert not route.called
 
 
 async def test_remove_from_group_reports_last_group(

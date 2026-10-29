@@ -310,6 +310,10 @@ class DeleteGroupResult(Model):
 class GroupMembershipResult(Model):
     group: GroupRef
     changed: list[str] = Field(description="Contacts added to / removed from the group.")
+    unchanged: list[str] = Field(
+        default_factory=list,
+        description="Contacts already in the group (add) or not in it (remove): nothing to do.",
+    )
     not_found: list[str] = Field(
         default_factory=list, description="Resource names Google did not find."
     )

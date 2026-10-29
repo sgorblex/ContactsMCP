@@ -28,7 +28,7 @@ from contacts_mcp.models import (
     PersonResourceName,
     check_resource_name,
 )
-from contacts_mcp.normalize import group_to_model
+from contacts_mcp.normalize import group_resource_names, group_to_model
 from contacts_mcp.registry import Account, AccountRegistry
 from contacts_mcp.sanitize import clean
 from contacts_mcp.tools._common import (
@@ -153,6 +153,25 @@ ResourceNamesArg = Annotated[
     list[PersonResourceName],
     Field(min_length=1, max_length=MEMBERS_LIMIT, description="Contacts ('people/…')."),
 ]
+
+
+async def _unchanged_contacts(
+    account: Account, group: str, names: list[str], *, add: bool
+) -> list[str]:
+    """Contacts for which the change is a no-op: already in ``group`` when adding, found
+    but not in it when removing."""
+    members: set[str] = set()
+    found: set[str] = set()
+    for person in await account.people.batch_get(names, ("memberships",)):
+        rn = person.get("resourceName")
+        if not isinstance(rn, str):
+            continue
+        found.add(rn)
+        if group in group_resource_names(person):
+            members.add(rn)
+    if add:
+        return [n for n in names if n in members]
+    return [n for n in names if n in found and n not in members]
 
 
 def register(mcp: FastMCP, registry: AccountRegistry) -> None:
@@ -287,28 +306,42 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
             attempt.resource_name = target.resource_name
             check_members_writable(target)
             names = _unique(resource_names)
-            attempt.contacts = list(names)
-            try:
-                if add:
-                    body = await acct.people.modify_group_members(target.resource_name, add=names)
-                else:
-                    body = await acct.people.modify_group_members(
-                        target.resource_name, remove=names
-                    )
-            finally:
-                acct.invalidate_groups()
+            # members:modify answers the same whether or not a contact was already in the
+            # group, so read the memberships first to report only real changes. Contacts
+            # batchGet does not return are still sent: Google decides what is not found.
+            unchanged = await _unchanged_contacts(acct, target.resource_name, names, add=add)
+            skip = set(unchanged)
+            to_send = [n for n in names if n not in skip]
+            attempt.contacts = list(to_send)
+            body: JSON = {}
+            if to_send:
+                try:
+                    if add:
+                        body = await acct.people.modify_group_members(
+                            target.resource_name, add=to_send
+                        )
+                    else:
+                        body = await acct.people.modify_group_members(
+                            target.resource_name, remove=to_send
+                        )
+                finally:
+                    acct.invalidate_groups()
             not_found = [str(n) for n in body.get("notFoundResourceNames") or []]
             kept = [str(n) for n in body.get("canNotRemoveLastContactGroupResourceNames") or []]
-            changed = [n for n in names if n not in not_found and n not in kept]
+            changed = [n for n in to_send if n not in not_found and n not in kept]
             return GroupMembershipResult(
-                group=target.ref(), changed=changed, not_found=not_found, could_not_remove=kept
+                group=target.ref(),
+                changed=changed,
+                unchanged=unchanged,
+                not_found=not_found,
+                could_not_remove=kept,
             )
 
     @mcp.tool(
         annotations=WRITE_IDEMPOTENT,
         description=(
             "Add contacts to a group (label). Works for user groups and for myContacts and "
-            "starred (starring a contact). Contacts already in the group are unaffected."
+            "starred (starring a contact). Contacts already in the group are listed in unchanged."
         ),
     )
     async def add_to_group(
@@ -321,7 +354,8 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
         description=(
             "Remove contacts from a group (label); the contacts themselves are kept. Works for "
             "user groups and for myContacts and starred (unstarring). Google refuses to remove "
-            "a contact from its last group: those are listed in could_not_remove."
+            "a contact from its last group: those are listed in could_not_remove. Contacts that "
+            "were not in the group are listed in unchanged."
         ),
     )
     async def remove_from_group(

@@ -114,8 +114,8 @@ third-party data, and the tool descriptions and server instructions say so.
 | `create_group(name, account)` | write | |
 | `rename_group(group, new_name, account)` | write, idempotent | user groups only |
 | `delete_group(group, account, delete_contacts=false)` | destructive | user groups only; with `delete_contacts`, the audit line names every contact deleted |
-| `add_to_group(group, resource_names, account)` | write, idempotent | `members:modify` |
-| `remove_from_group(group, resource_names, account)` | destructive, idempotent | reports `could_not_remove` |
+| `add_to_group(group, resource_names, account)` | write, idempotent | reads memberships first (`batchGet`), then `members:modify`; reports contacts already in the group |
+| `remove_from_group(group, resource_names, account)` | destructive, idempotent | reads memberships first (`batchGet`); reports contacts not in the group and `could_not_remove` |
 
 `destructiveHint` is true wherever values can be removed, not only for deletes: the MCP spec
 reserves `false` for additive changes.
