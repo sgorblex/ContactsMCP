@@ -29,3 +29,7 @@ run = ["uv run ruff check --fix .", "uv run ruff format ."]
 [tasks.test]
 description = "Run the unit tests"
 run = "uv run pytest"
+
+[tasks.build-container]
+description = "Build the container image for the host architecture"
+run = "podman build --format docker -f Containerfile -t contacts-mcp:dev ."

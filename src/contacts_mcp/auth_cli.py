@@ -1,8 +1,9 @@
 """``contacts-mcp auth …``: link, list, remove accounts and toggle read-only.
 
-An interactive command, run against the server's data directory (locally:
-``mise exec -- uv run contacts-mcp auth add <alias>``). It is not the MCP stdio server, so
-it may print to stdout. It never prints a token, the
+An interactive command, run against the server's data directory: from the server's image
+(``podman run --rm -it … contacts-mcp auth add <alias>``) with the same data volume, or
+locally (``mise exec -- uv run contacts-mcp auth add <alias>``). It is not the MCP stdio
+server, so it may print to stdout. It never prints a token, the
 client secret or an authorization code.
 
 Linking uses Google's loopback flow for installed apps (Desktop client). By default nothing
