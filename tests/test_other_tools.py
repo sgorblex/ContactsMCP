@@ -55,6 +55,7 @@ async def test_annotations_and_descriptions(
         assert "created automatically by Google" in text
         assert "e-mailed" in text
         assert "untrusted third-party" in text
+        assert "copy_other_contact_to_contacts" in text
         assert UNTRUSTED_NOTE in text
         assert tool.input_schema["additionalProperties"] is False
     assert SEARCH_LAG_NOTE in (tools["search_other_contacts"].description or "")

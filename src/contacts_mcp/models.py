@@ -304,7 +304,7 @@ class GroupList(Model):
 
 class DeleteGroupResult(Model):
     deleted: Group
-    contacts_deleted: bool
+    contacts_deleted: int = Field(description="Contacts deleted with the group (0 unless asked).")
 
 
 class GroupMembershipResult(Model):
