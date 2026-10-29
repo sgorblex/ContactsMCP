@@ -5,6 +5,104 @@ API), with several Google accounts side by side. Connect it to claude.ai (custom
 Claude Code or any other MCP client, and let the assistant search, read, create and edit your
 contacts.
 
+Contents: [1. Google Cloud setup](#1-google-cloud-setup) ·
+[2. Linking accounts](#2-linking-accounts) · [Configuration](#configuration) ·
+[Development](#development) · [License](#license)
+
+## 1. Google Cloud setup
+
+One Google Cloud OAuth client is shared by all the accounts you link.
+
+1. In the [Google Cloud console](https://console.cloud.google.com/) create a project (or pick
+   one).
+2. **Enable the People API**: *APIs & Services → Library → Google People API → Enable*.
+3. **Configure the OAuth consent screen** (*Google Auth Platform* or *APIs & Services → OAuth
+   consent screen*): app name, support e-mail, and for audience *External* (see below for
+   Workspace). On the data access / scopes page add these scopes:
+   - `https://www.googleapis.com/auth/contacts`
+   - `https://www.googleapis.com/auth/contacts.other.readonly`
+   - `openid` and `https://www.googleapis.com/auth/userinfo.email` (non-sensitive: linking
+     uses them only to record which address the account belongs to)
+
+   No directory scope is used.
+4. **Publish the app: set the publishing status to *In production*.** While it is in *Testing*,
+   Google expires refresh tokens after 7 days and you would have to re-link every account weekly.
+5. **Create the client**: *Credentials → Create credentials → OAuth client ID → Application type
+   **Desktop app***. Download the JSON. It is a secret: keep it out of the repository (the
+   `.gitignore` already excludes `client_secret*.json`).
+
+Give the server the client either as `GOOGLE_CLIENT_SECRETS_FILE=/path/to/client_secret.json`
+(the downloaded file with its `installed` key; a *Web application* client is rejected with a
+clear message), or as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (each also available as
+`…_FILE`). Setting both ways is an error.
+
+**The "unverified app" warning.** An app in production that has not gone through Google's
+verification shows a "Google hasn't verified this app" screen when you link an account: choose
+*Advanced → Go to … (unsafe)*. For personal use that is fine: the `contacts` scope is
+*sensitive*, not *restricted*, and an unverified app can have up to 100 users. Verification is
+only needed to remove the warning or to go beyond 100 users.
+
+**Google Workspace accounts.** A Workspace admin may block third-party apps. If linking fails
+with an "access blocked" or admin-policy error, an admin has to allow the client in the Admin
+console (*Security → Access and data control → API controls → Manage third-party app access*,
+by client ID). If every account you want to link belongs to one Workspace organization, you can
+instead choose the **Internal** audience on the consent screen: no publishing, no warning, and
+no 7-day token expiry, but only that organization's accounts can sign in.
+
+## 2. Linking accounts
+
+Accounts are linked with the `contacts-mcp auth …` command. It works headless, with no tunnel. The alias is yours to pick: lowercase letters, digits and `-`,
+up to 32 characters (`personal`, `work`).
+
+Each linked account is a file `accounts/<alias>.json` in the data directory
+(`CONTACTS_MCP_DATA_DIR`), mode 0600, holding the refresh token, the account's e-mail, the
+granted scopes and its read-only flag.
+
+### Paste flow (default)
+
+```sh
+contacts-mcp auth add personal
+```
+
+1. The command prints a Google sign-in URL. Open it in any browser, on any machine.
+2. Sign in, accept the "unverified app" screen if shown, and grant every permission asked.
+3. Google redirects to `http://127.0.0.1:<port>/?state=…&code=…`. The page fails to load: that is
+   expected. Copy the **entire URL** from the address bar.
+4. Paste it into the terminal. The command checks `state`, exchanges the code (with PKCE), reads
+   the account's e-mail and saves the file.
+
+### Listening flow
+
+```sh
+contacts-mcp auth add personal --listen 8765
+```
+
+The command serves the loopback redirect itself, so the browser completes the flow and nothing
+needs pasting. Use it on your own machine, or on a server reached through a tunnel:
+
+```sh
+ssh -L 8765:127.0.0.1:8765 you@server      # on your machine
+contacts-mcp auth add personal --listen 8765   # in that ssh session; open the printed URL locally
+```
+
+Add `--read-only` to link the account as read-only from the start.
+
+### Locally
+
+```sh
+mise exec -- uv run contacts-mcp auth add personal
+```
+
+The data directory defaults to `~/.local/share/contacts-mcp` (`$XDG_DATA_HOME/contacts-mcp`).
+
+### Managing accounts
+
+```sh
+contacts-mcp auth list                          # aliases, e-mails, read-only, status
+contacts-mcp auth set-read-only personal on     # or off
+contacts-mcp auth remove personal               # also revokes the token at Google, best effort
+```
+
 ## Configuration
 
 Everything is configured with environment variables, validated at startup (errors name the
