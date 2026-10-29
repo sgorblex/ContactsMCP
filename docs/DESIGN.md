@@ -17,6 +17,8 @@ configuration are in the [README](../README.md).
 | `fields.py` | Field masks (`PERSON_FIELDS`, `SUMMARY_FIELDS`, `WRITABLE_FIELDS`, …), scopes, API URL: one place, so reads and writes agree |
 | `google/oauth.py` | Google OAuth URLs; `TokenProvider`: refresh via POST, access token in memory only, `invalid_grant` → `NeedsRelinkError` |
 | `google/people.py` | `PeopleClient`: one method per endpoint, raw JSON in and out; retries, 401 refresh, error mapping |
+| `models.py` | Pydantic tool inputs and outputs (all `extra="forbid"`), resource-name validators, `ListOps[T]` |
+| `normalize.py` | People API JSON → `ContactSummary` / `Contact` / `OtherContact` / `Group` (read direction); values from the person's Google profile listed as `from_profile` |
 
 ## People API client
 
