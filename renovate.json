@@ -1,0 +1,59 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "dependencyDashboard": true,
+  "dependencyDashboardApproval": true,
+  "automerge": true,
+  "automergeStrategy": "squash",
+  "platformAutomerge": true,
+  "minimumReleaseAge": "7 days",
+  "description": [
+    "Updates wait as checkboxes on the Dependency Dashboard: ticking one creates the branch and the PR together, and the PR merges itself once the required checks pass. `platformAutomerge` hands the merge to GitHub's auto-merge, which waits only for the ruleset's required checks, so it is safe only while every CI job is required there.",
+    "`minimumReleaseAge` holds a new release for a week before it is proposed."
+  ],
+  "vulnerabilityAlerts": {
+    "description": "Security updates skip dashboard approval, so `automerge: false` keeps a person in front of every merge. `fix` records them as fixes rather than chores.",
+    "semanticCommitType": "fix",
+    "automerge": false
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "minimumReleaseAge": null
+  },
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "description": "Major updates may need code changes; merge them by hand."
+    },
+    {
+      "matchManagers": ["pep621"],
+      "groupName": "Python dependencies (uv)",
+      "rangeStrategy": "update-lockfile",
+      "minimumReleaseAge": null,
+      "description": "Constraints are open `>=`, so the default strategy would propose nothing and upgrades would only arrive unattributed inside lock file maintenance; `update-lockfile` makes them named PRs touching `uv.lock`. No soak: `uv lock --upgrade-package` takes no version and resolves the newest release anyway, so a soak would only make the run fail."
+    },
+    {
+      "matchManagers": ["pep621"],
+      "matchPackageNames": ["mypy", "ruff"],
+      "groupName": "lint toolchain (expect new diagnostics)",
+      "description": "New releases can add diagnostics with no source change; keep them out of the general group so a red check is attributable."
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "pinDigests": true,
+      "groupName": "GitHub Actions"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["digest", "pinDigest"],
+      "minimumReleaseAge": null,
+      "description": "Renovate reports no release date for a digest update, so the soak would stay pending forever instead of holding anything back; the SHA pin and reading the diff are the guard."
+    },
+    {
+      "matchPackageNames": ["python", "python/cpython"],
+      "groupName": "python (mise, .python-version)",
+      "description": "Keep mise.toml and .python-version on one version. `matchPackageNames` matches packageName: mise's entry resolves to `python/cpython`."
+    }
+  ]
+}
