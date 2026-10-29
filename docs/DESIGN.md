@@ -23,6 +23,13 @@ configuration are in the [README](../README.md).
 | `accounts.py` | `AccountFileStore`: one JSON file per alias, written atomically, 0600 in a 0700 directory |
 | `registry.py` | `AccountRegistry` / `Account`: routing by alias, per-account mutation lock, search warm-up, group-name cache, `reload()` |
 | `auth_cli.py` | `auth add / list / remove / set-read-only` |
+| `tools/_common.py` | Tool annotations and shared description notes |
+| `tools/read.py` | `accounts`, `search_contacts`, `list_contacts`, `get_contact` |
+| `tools/other.py` | `list_other_contacts`, `search_other_contacts` |
+
+Every tool module exposes `register(mcp: FastMCP, registry: AccountRegistry) -> None`;
+`tools.register_all` calls them all. Tools are `async`, close over the registry, and return
+pydantic models, from which fastmcp derives the output schema.
 
 ## People API client
 
@@ -68,6 +75,27 @@ everything at the HTTP layer with `respx`.
   paste the redirect URL back; `--listen` serves the redirect for real. It also asks for
   `openid email` and takes the account's address from the ID token, since the `contacts` scope
   alone cannot read it from `people/me`.
+
+## Tools
+
+Every tool except `accounts` takes `account`. `search_contacts` also accepts `"*"`: every linked
+account is searched concurrently, results are tagged with their alias, and per-account failures
+(unusable accounts included) are reported in `failures` instead of failing the call.
+
+List and search tools return compact summaries (resource name, display name, primary e-mail and
+phone, organization, groups); `get_contact` returns the full normalized record with its `etag`.
+People API `metadata`/`source` noise is stripped unless `raw` is asked for. Every returned string
+goes through `sanitize.clean()`: contact text, and *Other contacts* above all, is untrusted
+third-party data, and the tool descriptions say so.
+
+| Tool | Annotations | Notes |
+| --- | --- | --- |
+| `accounts` | read (openWorld false) | aliases, e-mails, read_only, status, what to do |
+| `search_contacts(query, account, limit=10)` | read | `people:searchContacts`, warm-up once per account; limit ≤ 30 |
+| `list_contacts(account, page_size=50, page_token, sort)` | read | `connections.list` with real pagination |
+| `get_contact(resource_name, account, raw=false)` | read | full `Contact` with etag |
+| `list_other_contacts(account, page_size, page_token)` | read | |
+| `search_other_contacts(query, account, limit)` | read | its own warm-up |
 
 ## Configuration
 
