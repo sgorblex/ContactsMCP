@@ -1,0 +1,31 @@
+# Google OAuth client credentials and local environment: never commit.
+client_secret*.json
+.env
+.env.*
+!.env.example
+*.secret
+
+# Local runtime state (account refresh tokens, OAuth registrations).
+/data/
+/oauth/
+.local/
+
+# Python / tooling
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.worktrees/
+
+# Local tool state: only the shared Claude Code skills and settings are committed.
+.claude/*
+!.claude/skills/
+!.claude/settings.json
+mise.local.toml
