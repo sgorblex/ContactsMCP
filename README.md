@@ -460,6 +460,9 @@ and pushes it to GHCR as `:<version>` and `:latest` for `linux/amd64` and `linux
 
 [`docs/DESIGN.md`](docs/DESIGN.md) describes the module layout and how the pieces fit.
 
+Contributors (people and coding agents) follow [`AGENTS.md`](AGENTS.md): branches, commits,
+stacked PRs and which docs to update with each change.
+
 ## License
 
 [GPL-3.0-or-later](LICENSE).
