@@ -14,16 +14,14 @@ the user pastes the address-bar URL back. ``--listen PORT`` serves that redirect
 from __future__ import annotations
 
 import argparse
-import base64
-import hashlib
+import asyncio
 import http.server
-import json
 import secrets
 import sys
 import time
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from pydantic import SecretStr
@@ -35,21 +33,25 @@ from contacts_mcp.accounts import (
     validate_alias,
 )
 from contacts_mcp.config import ConfigError, GoogleClientConfig, load_data_dir, load_google_client
-from contacts_mcp.fields import PEOPLE_API_URL, SCOPES
-from contacts_mcp.google.oauth import AUTH_URL, REVOKE_URL, TOKEN_URL
+from contacts_mcp.fields import SCOPES
+from contacts_mcp.linking import (
+    Grant,
+    LinkError,
+    LinkErrorKind,
+    RevokeOutcome,
+    authorization_url,
+    complete_link,
+    new_pkce,
+    new_state,
+    revoke,
+    state_matches,
+)
 
-#: Asked when linking: the contacts scopes, plus `openid email` so the account's own
-#: address comes back in the ID token (`contacts` does not allow reading it from
-#: people/me, which answers 403).
-LINK_SCOPES = (*SCOPES, "openid", "email")
 SIGHUP_HINT = (
     "A running server picks this up on SIGHUP (or restart): "
     "`podman kill --signal HUP <container>`, `docker kill --signal HUP <container>` "
     "or `kill -HUP <pid>`."
 )
-#: The ``iss`` of Google's ID tokens.
-GOOGLE_ISSUERS = ("https://accounts.google.com", "accounts.google.com")
-
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
@@ -61,6 +63,14 @@ HTTP_TIMEOUT = 30.0
 
 class AuthError(Exception):
     """An operation failed; the message is shown to the user as is (and holds no secret)."""
+
+
+#: What to do about a linking failure, from the command line.
+_LINK_HINTS: dict[LinkErrorKind, str] = {
+    "invalid_grant": "Run the command again and paste the fresh URL right after consenting.",
+    "redirect_uri_mismatch": "The OAuth client must be of type 'Desktop app'.",
+    "invalid_client": "Check GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.",
+}
 
 
 # --- output -----------------------------------------------------------------------------
@@ -212,42 +222,18 @@ def _cmd_add(alias: str, args: argparse.Namespace) -> int:
     store = AccountFileStore(load_data_dir())
     existing = _load_existing(store, alias)
 
-    verifier = secrets.token_urlsafe(64)
-    challenge = (
-        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest())
-        .rstrip(b"=")
-        .decode("ascii")
-    )
-    state = secrets.token_urlsafe(32)
+    pkce = new_pkce()
+    state = new_state()
 
     if args.listen is not None:
-        code, redirect_uri = _listen_flow(client, state, challenge, args.listen)
+        code, redirect_uri = _listen_flow(client, state, pkce.challenge, args.listen)
     else:
         port = args.port or 49152 + secrets.randbelow(65536 - 49152)
         redirect_uri = f"http://127.0.0.1:{port}/"
-        code = _paste_flow(_authorization_url(client, redirect_uri, state, challenge), state)
+        code = _paste_flow(authorization_url(client, redirect_uri, state, pkce.challenge), state)
 
-    tokens = _exchange_code(client, code, redirect_uri, verifier)
-    refresh_token = tokens.get("refresh_token")
-    if not isinstance(refresh_token, str) or not refresh_token:
-        raise AuthError(
-            "Google returned no refresh token. Remove this app's access at "
-            "https://myaccount.google.com/permissions and run the command again."
-        )
-    scope_field = tokens.get("scope")
-    granted = scope_field.split() if isinstance(scope_field, str) else []
-    missing = [s for s in SCOPES if s not in granted]
-    if missing:
-        raise AuthError(
-            "Not every permission was granted. Run the command again and tick all the "
-            "boxes on Google's consent screen (missing: " + ", ".join(missing) + ")."
-        )
-    access_token = tokens.get("access_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise AuthError("Google returned no access token.")
-
-    _check_people_api(access_token)
-    email = _email_from_id_token(tokens.get("id_token"), client)
+    grant = asyncio.run(_complete_link(client, code, redirect_uri, pkce.verifier))
+    email = grant.email
     if email is None:
         _warn("Google did not return the account's verified e-mail address; saving without it")
 
@@ -261,8 +247,8 @@ def _cmd_add(alias: str, args: argparse.Namespace) -> int:
     record = AccountRecord(
         alias=alias,
         email=email,
-        refresh_token=SecretStr(refresh_token),
-        scopes=granted,
+        refresh_token=SecretStr(grant.refresh_token),
+        scopes=grant.scopes,
         read_only=read_only,
         linked_at=datetime.now(UTC),
     )
@@ -290,33 +276,9 @@ def _load_existing(store: AccountFileStore, alias: str) -> AccountRecord | None:
         return None
 
 
-def _authorization_url(
-    client: GoogleClientConfig, redirect_uri: str, state: str, challenge: str
-) -> str:
-    query = urlencode(
-        {
-            "client_id": client.client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "scope": " ".join(LINK_SCOPES),
-            "access_type": "offline",
-            "prompt": "consent",
-            "include_granted_scopes": "false",
-            "state": state,
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-        }
-    )
-    return f"{AUTH_URL}?{query}"
-
-
-def _state_matches(got: str, expected: str) -> bool:
-    return secrets.compare_digest(got.encode("utf-8"), expected.encode("utf-8"))
-
-
 def _code_from_params(params: dict[str, list[str]], state: str) -> str:
     """Validate a redirect's query parameters and return the authorization code."""
-    if not _state_matches(params.get("state", [""])[0], state):
+    if not state_matches(params.get("state", [""])[0], state):
         raise AuthError(
             "The 'state' value does not match this session: the URL is from another "
             "attempt (or was altered). Run the command again and paste the new URL."
@@ -385,7 +347,7 @@ def _listen_flow(
             params = parse_qs(urlsplit(self.path).query)
             if "code" not in params and "error" not in params:
                 self._reply(404, "Not found", "Nothing here.")
-            elif not _state_matches(params.get("state", [""])[0], state):
+            elif not state_matches(params.get("state", [""])[0], state):
                 self._reply(400, "Refused", "Unexpected request; close this tab and try again.")
             elif "error" in params:
                 received.update(params)
@@ -416,7 +378,7 @@ def _listen_flow(
     try:
         _say("Open this URL in a browser and sign in with the Google account to link:")
         _say()
-        _say(_authorization_url(client, redirect_uri, state, challenge))
+        _say(authorization_url(client, redirect_uri, state, challenge))
         _say()
         _say(
             f"Listening on {redirect_uri} for Google's redirect (waits up to "
@@ -437,119 +399,20 @@ def _listen_flow(
 # --- Google calls -------------------------------------------------------------------------------
 
 
-def _json(response: httpx.Response) -> dict[str, Any]:
-    try:
-        body = response.json()
-    except ValueError:
-        return {}
-    return body if isinstance(body, dict) else {}
-
-
-def _exchange_code(
+async def _complete_link(
     client: GoogleClientConfig, code: str, redirect_uri: str, verifier: str
-) -> dict[str, Any]:
-    try:
-        response = httpx.post(
-            TOKEN_URL,
-            data={
-                "code": code,
-                "client_id": client.client_id,
-                "client_secret": client.client_secret.get_secret_value(),
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-                "code_verifier": verifier,
-            },
-            timeout=HTTP_TIMEOUT,
-        )
-    except httpx.HTTPError as e:
-        raise AuthError(f"could not reach Google ({type(e).__name__})") from None
-    body = _json(response)
-    if response.status_code == 200:
-        return body
-    error = body.get("error")
-    error = error if isinstance(error, str) else ""
-    if error == "invalid_grant":
-        raise AuthError(
-            "Google rejected the authorization code: it expired or was already used. "
-            "Run the command again and paste the fresh URL right after consenting."
-        )
-    if error == "redirect_uri_mismatch":
-        raise AuthError(
-            "Google rejected the redirect URI (redirect_uri_mismatch): the OAuth client must "
-            "be of type 'Desktop app'."
-        )
-    if error in ("invalid_client", "unauthorized_client"):
-        raise AuthError(
-            f"Google rejected the OAuth client ({error}): check GOOGLE_CLIENT_ID and "
-            "GOOGLE_CLIENT_SECRET."
-        )
-    raise AuthError(
-        f"the token exchange failed (HTTP {response.status_code}"
-        + (f", {error}" if error else "")
-        + ")"
-    )
+) -> Grant:
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as http:
+        try:
+            return await complete_link(http, client, code, redirect_uri, verifier)
+        except LinkError as e:
+            hint = _LINK_HINTS.get(e.kind) if e.kind else None
+            raise AuthError(f"{e} {hint}" if hint else str(e)) from None
 
 
-def _email_from_id_token(id_token: object, client: GoogleClientConfig) -> str | None:
-    """The verified e-mail in the ID token Google returned from the token endpoint.
-
-    It comes straight from Google over TLS in answer to our own code exchange, so its
-    signature need not be checked (OpenID Connect Core 3.1.3.7); its issuer and audience
-    still must be Google and this client. The address is only a label for the account,
-    never used to authorize anything.
-    """
-    if not isinstance(id_token, str) or id_token.count(".") != 2:
-        return None
-    payload = id_token.split(".")[1]
-    try:
-        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-    except ValueError:
-        return None
-    if not isinstance(claims, dict) or claims.get("email_verified") is not True:
-        return None
-    if claims.get("iss") not in GOOGLE_ISSUERS or claims.get("aud") != client.client_id:
-        return None
-    email = claims.get("email")
-    return email if isinstance(email, str) and email else None
-
-
-def _check_people_api(access_token: str) -> None:
-    """Fail now, not at the first tool call, when the People API can't be used."""
-    try:
-        response = httpx.get(
-            f"{PEOPLE_API_URL}/people/me/connections",
-            params={"pageSize": 1, "personFields": "names"},
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=HTTP_TIMEOUT,
-        )
-    except httpx.HTTPError as e:
-        raise AuthError(f"could not reach the People API ({type(e).__name__})") from None
-    if response.status_code == 403:
-        reason = _google_reason(response)
-        if reason == "SERVICE_DISABLED":
-            raise AuthError(
-                "the People API is not enabled in the Google Cloud project of the OAuth "
-                "client: enable it (APIs & Services → Library → People API) and try again."
-            )
-        raise AuthError(
-            "Google refused access to the contacts (403"
-            + (f", {reason}" if reason else "")
-            + "). For a Workspace account, an admin may have to allow this OAuth client."
-        )
-    if response.status_code != 200:
-        raise AuthError(f"the People API check failed (HTTP {response.status_code})")
-
-
-def _google_reason(response: httpx.Response) -> str | None:
-    """The machine-readable reason of a Google API error (``SERVICE_DISABLED``, …)."""
-    error = _json(response).get("error")
-    if not isinstance(error, dict):
-        return None
-    for detail in error.get("details") or []:
-        if isinstance(detail, dict) and isinstance(detail.get("reason"), str):
-            return str(detail["reason"])
-    status = error.get("status")
-    return status if isinstance(status, str) else None
+async def _revoke(refresh_token: str) -> RevokeOutcome:
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as http:
+        return await revoke(http, refresh_token)
 
 
 # --- auth list / remove / set-read-only -----------------------------------------------------------
@@ -608,24 +471,16 @@ def _cmd_remove(alias: str, *, revoke: bool) -> int:
         _warn(f"cannot read the file of '{alias}' ({e}); it cannot be revoked at Google")
 
     if revoke and record is not None:
-        try:
-            response = httpx.post(
-                REVOKE_URL,
-                data={"token": record.refresh_token.get_secret_value()},
-                timeout=HTTP_TIMEOUT,
-            )
-        except httpx.HTTPError as e:
-            _warn(f"could not revoke the grant at Google ({type(e).__name__}); deleting anyway")
+        outcome = asyncio.run(_revoke(record.refresh_token.get_secret_value()))
+        if outcome == "revoked":
+            _say("Revoked the grant at Google.")
+        elif outcome == "already_revoked":
+            _say("Google says the token was already revoked or expired.")
         else:
-            if response.status_code == 200:
-                _say("Revoked the grant at Google.")
-            elif _json(response).get("error") == "invalid_token":
-                _say("Google says the token was already revoked or expired.")
-            else:
-                _warn(
-                    f"Google did not revoke the grant (HTTP {response.status_code}); deleting "
-                    "the file anyway. Check https://myaccount.google.com/permissions"
-                )
+            _warn(
+                "could not revoke the grant at Google; deleting the file anyway. Check "
+                "https://myaccount.google.com/permissions"
+            )
     try:
         store.delete(alias)
     except AccountFileError as e:

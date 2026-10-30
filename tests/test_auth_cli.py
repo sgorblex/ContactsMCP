@@ -24,6 +24,7 @@ from contacts_mcp.accounts import AccountFileStore, AccountRecord
 from contacts_mcp.cli import main as cli_main
 from contacts_mcp.fields import PEOPLE_API_URL, SCOPES
 from contacts_mcp.google.oauth import AUTH_URL, REVOKE_URL, TOKEN_URL
+from contacts_mcp.linking import LINK_SCOPES
 
 CLIENT_ID = "cli-client-id.apps.example"
 CLIENT_SECRET = "cli-client-SECRET-value"
@@ -86,7 +87,7 @@ def google(data_dir: Path) -> Iterator[respx.MockRouter]:
                     "access_token": ACCESS,
                     "refresh_token": REFRESH,
                     "expires_in": 3599,
-                    "scope": " ".join(auth_cli.LINK_SCOPES),
+                    "scope": " ".join(LINK_SCOPES),
                     "token_type": "Bearer",
                     "id_token": id_token(),
                 },
@@ -185,7 +186,7 @@ def test_add_paste_flow(
     assert AUTH_URL in result.out
     assert p["client_id"] == CLIENT_ID
     assert p["response_type"] == "code"
-    assert p["scope"].split() == list(auth_cli.LINK_SCOPES)
+    assert p["scope"].split() == list(LINK_SCOPES)
     assert p["access_type"] == "offline"
     assert p["prompt"] == "consent"
     assert p["include_granted_scopes"] == "false"
@@ -211,7 +212,7 @@ def test_add_paste_flow(
     saved = store.load("work")
     assert saved.email == "me@example.com"
     assert saved.refresh_token.get_secret_value() == REFRESH
-    assert saved.scopes == list(auth_cli.LINK_SCOPES)
+    assert saved.scopes == list(LINK_SCOPES)
     assert saved.read_only is False
     assert saved.linked_at.tzinfo is not None
     assert saved.linked_at.utcoffset() == UTC.utcoffset(None)
@@ -440,7 +441,7 @@ def test_add_takes_the_email_from_the_id_token(
             json={
                 "access_token": ACCESS,
                 "refresh_token": REFRESH,
-                "scope": " ".join(auth_cli.LINK_SCOPES),
+                "scope": " ".join(LINK_SCOPES),
                 "id_token": id_token("owner@example.com"),
             },
         )
@@ -471,7 +472,7 @@ def test_add_without_a_usable_id_token_email_saves_the_account_with_a_warning(
     body: dict[str, object] = {
         "access_token": ACCESS,
         "refresh_token": REFRESH,
-        "scope": " ".join(auth_cli.LINK_SCOPES),
+        "scope": " ".join(LINK_SCOPES),
     }
     if token is not None:
         body["id_token"] = token
@@ -753,7 +754,7 @@ def test_remove_tolerates_revoke_failure(
     google["revoke"].mock(return_value=httpx.Response(500))
     assert auth_cli.main(["remove", "work"]) == 0
     assert not store.path("work").exists()
-    assert "did not revoke" in capsys.readouterr().err
+    assert "could not revoke" in capsys.readouterr().err
 
 
 def test_remove_tolerates_unreachable_google(
