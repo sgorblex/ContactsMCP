@@ -5,12 +5,21 @@ API), with several Google accounts side by side. Connect it to claude.ai (custom
 Claude Code or any other MCP client, and let the assistant search, read, create and edit your
 contacts.
 
+- **Multiple accounts**, each linked once from the command line and addressed by an alias.
+- **Careful edits**: `update_contact` changes only what you ask. Existing phone numbers, e-mails
+  and the like are never silently dropped.
+- **Safe to expose**: a per-account read-only flag, a tool allowlist, an audit log, and (over
+  HTTP) OAuth against your own identity provider plus a user allowlist.
+- **Stdio for local use, streamable HTTP for deployment** behind your own reverse proxy.
+- A small container image.
+
 Contents: [1. What it does](#1-what-it-does) · [2. Google Cloud setup](#2-google-cloud-setup) ·
 [3. Identity provider setup](#3-identity-provider-setup) ·
 [4. Linking accounts](#4-linking-accounts) · [5. Running it](#5-running-it) ·
-[6. Connecting a client](#6-connecting-a-client) · [Configuration](#configuration) ·
-[Tool exposure](#tool-exposure) · [Read-only accounts](#read-only-accounts) ·
-[Security](#security) · [Development](#development) · [License](#license)
+[6. Connecting a client](#6-connecting-a-client) · [7. What to back up](#7-what-to-back-up) ·
+[Configuration](#configuration) · [Tool exposure](#tool-exposure) ·
+[Read-only accounts](#read-only-accounts) · [Security](#security) · [Development](#development) ·
+[License](#license)
 
 ## 1. What it does
 
@@ -205,6 +214,17 @@ contacts-mcp auth add personal --listen 8765   # in that ssh session; open the p
 
 Add `--read-only` to link the account as read-only from the start.
 
+### In a container
+
+```sh
+podman run --rm -it -v contacts-data:/data --env-file .env \
+  ghcr.io/<owner>/contacts-mcp contacts-mcp auth add personal
+```
+
+Use the same data volume as the server, and the same Google client settings (the `.env` file,
+or `-e GOOGLE_CLIENT_SECRETS_FILE=… -v ./client_secret.json:…:ro`). Use the paste flow here; the
+`--listen` flow binds the loopback of the container, so it needs `--network host`.
+
 ### Locally
 
 ```sh
@@ -222,7 +242,8 @@ contacts-mcp auth remove personal               # also revokes the token at Goog
 ```
 
 A running server reads the account files at startup and again on **`SIGHUP`**: after adding,
-removing or changing an account, send it one (`kill -HUP <pid>`) or restart it. A file that
+removing or changing an account, run `podman kill -s HUP contacts-mcp` (or `docker kill -s HUP`,
+or `systemctl --user kill -s HUP contacts-mcp` for a Quadlet unit), or restart it. A file that
 cannot be read never crashes the server; it is reported by the `accounts` tool.
 
 If Google revokes a refresh token (you removed the app's access in your Google account, or the
@@ -268,17 +289,52 @@ npx @modelcontextprotocol/inspector mise exec -- uv run contacts-mcp
 
 or `mise exec -- uv run python scripts/list_tools_stdio.py`, which prints the tool names and annotations.
 
-### Over HTTP
+### Self-hosted over HTTP
 
-With `CONTACTS_MCP_TRANSPORT=http` the server speaks streamable HTTP on
-`CONTACTS_MCP_HOST:CONTACTS_MCP_PORT` (default `0.0.0.0:8000`) at `/mcp`, and refuses to start
-without the identity provider settings (section 3) and the user allowlist: there is no insecure
-mode. Put it behind a reverse proxy that terminates TLS, and set `CONTACTS_MCP_BASE_URL` to the
-public URL.
+With `CONTACTS_MCP_TRANSPORT=http` (the image's default) the server speaks streamable HTTP on
+port 8000 at `/mcp`, and refuses to start without the identity provider settings (section 3) and
+the user allowlist: there is no insecure mode. Copy [`.env.example`](.env.example) to `.env` (no
+quotes around values: `podman --env-file` keeps them as part of the value) and fill in the
+Google client, the base URL, the identity provider and the allowlist.
+
+Podman or Docker:
+
+```sh
+podman run -d --name contacts-mcp --restart unless-stopped \
+  -p 127.0.0.1:8000:8000 \
+  -v contacts-data:/data -v contacts-oauth:/oauth \
+  --env-file .env \
+  ghcr.io/<owner>/contacts-mcp:latest
+```
+
+`mise run build-container` builds the image locally as `contacts-mcp:dev`; the examples use the
+name it is published under, `ghcr.io/<owner>/contacts-mcp`.
+
+Other options, all in [`deploy/`](deploy/):
+
+- [`compose.yml`](deploy/compose.yml): Docker Compose / podman-compose, with secrets read from
+  files (`…_FILE` variables) and the one-shot account-linking command. The server runs as uid
+  1000, so the secret files must be readable by it (rootless Podman: `podman unshare chown
+  1000:1000 secrets/*`).
+- [`contacts-mcp.container`](deploy/contacts-mcp.container): a Podman Quadlet unit for systemd,
+  with Podman secrets and the auto-update label.
+- [`reverse-proxy.md`](deploy/reverse-proxy.md): TLS is terminated at your reverse proxy, which
+  forwards to port 8000. Caddy and nginx snippets, the streaming settings, and the
+  `CONTACTS_MCP_BASE_URL` / `CONTACTS_MCP_TRUST_FORWARDED_HEADERS` /
+  `CONTACTS_MCP_FORWARDED_ALLOW_IPS` settings that must agree with it.
+
+The examples use Podman/Docker secrets and named volumes, but nothing depends on them. A plain
+env file (mode 0600) with every secret in it and bind-mounted host directories work just as well:
+give the Google client as `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` instead of the JSON file,
+and make the `/data` and `/oauth` directories owned by uid 1000 with mode 0700 (with rootless
+Podman, through `podman unshare chown`). Back up the env file together with the account files.
 
 `/healthz` answers without authentication: the process is up and the account files are
 readable (no Google call; `?deep=1` also tries a token refresh per account). It reports counts
-only; the aliases of accounts needing attention go to the log.
+only; the aliases of accounts needing attention go to the log. The image's `HEALTHCHECK` uses
+it.
+
+Then link accounts (section 4) and send the server a `SIGHUP`.
 
 ## 6. Connecting a client
 
@@ -299,18 +355,28 @@ Any other MCP client that supports OAuth 2.1 with dynamic client registration wo
 its redirect URI is allowed (`CONTACTS_MCP_ALLOWED_REDIRECT_URIS`; by default claude.ai, claude.com
 and Claude Code's loopback callback). Whoever signs in must be in `CONTACTS_MCP_ALLOWED_USERS`.
 
+## 7. What to back up
+
+- **`/data`** (the account files, `CONTACTS_MCP_DATA_DIR`): the refresh tokens. Losing them means
+  linking each account again; they are small and written atomically, so they can be copied while
+  the server runs. Treat the backup as secret.
+- **`/oauth`** (`FASTMCP_HOME`) is **disposable**: OAuth client registrations and upstream
+  tokens. Losing it only makes MCP clients sign in again.
+- Your configuration (`.env`, the secrets and the Google client JSON) is yours to keep; the
+  Google client can also be re-downloaded or recreated in the console.
+
 ## Configuration
 
 Everything is configured with environment variables, validated at startup (errors name the
 variable). Each secret can be given as `NAME` or as `NAME_FILE` (a path, for Docker/Podman
-secrets), not both.
+secrets), not both. [`.env.example`](.env.example) is the commented template.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (`_FILE`) | | The Desktop-app client. Or: |
 | `GOOGLE_CLIENT_SECRETS_FILE` | | the downloaded Desktop-app JSON |
-| `CONTACTS_MCP_TRANSPORT` | `stdio` | `stdio` or `http` |
-| `CONTACTS_MCP_DATA_DIR` | `$XDG_DATA_HOME/contacts-mcp` (`~/.local/share/…`) | account files |
+| `CONTACTS_MCP_TRANSPORT` | `stdio` (`http` in the image) | `stdio` or `http` |
+| `CONTACTS_MCP_DATA_DIR` | `$XDG_DATA_HOME/contacts-mcp` (`~/.local/share/…`; `/data` in the image) | account files |
 | `CONTACTS_MCP_SERVER_NAME` | `contacts` | |
 | `CONTACTS_MCP_EXPOSED_TOOLS` | `all` | see [Tool exposure](#tool-exposure) |
 | `CONTACTS_MCP_LOG_LEVEL` | `INFO` | JSON lines on stderr |
@@ -324,9 +390,9 @@ secrets), not both.
 | `CONTACTS_MCP_OIDC_UPSTREAM_SCOPES` | `openid email offline_access` | |
 | `CONTACTS_MCP_OIDC_EXTRA_AUTHORIZE_PARAMS` | | extra provider parameters, `key=value&key=value` (not `scope`) |
 | `CONTACTS_MCP_OIDC_VERIFY_ID_TOKEN` | `false` | verify the ID token instead of the access token (Google) |
-| `CONTACTS_MCP_TRUST_FORWARDED_HEADERS` | `false` | trust `X-Forwarded-*` |
-| `CONTACTS_MCP_FORWARDED_ALLOW_IPS` | `127.0.0.1` | proxies trusted for `X-Forwarded-*` |
-| `FASTMCP_HOME` | `~/.local/share/fastmcp` | OAuth state |
+| `CONTACTS_MCP_TRUST_FORWARDED_HEADERS` | `false` | trust `X-Forwarded-For` / `-Proto` |
+| `CONTACTS_MCP_FORWARDED_ALLOW_IPS` | `127.0.0.1` | proxies trusted for them |
+| `FASTMCP_HOME` | `~/.local/share/fastmcp` (`/oauth` in the image) | OAuth state |
 
 ## Tool exposure
 
@@ -372,9 +438,11 @@ and the Python minor version, and defines the tasks; plain `uv` works the same.
 | `mise run check` | `uv run ruff check . && uv run ruff format --check . && uv run mypy` |
 | `mise run fix` | `uv run ruff check --fix . && uv run ruff format .` |
 | `mise run test` | `uv run pytest` |
+| `mise run build-container` | `podman build --format docker -f Containerfile -t contacts-mcp:dev .` |
 
 CI (GitHub Actions, [`check.yml`](.github/workflows/check.yml)) runs the same tasks as one
-check per job on every pull request, stacked ones included, and on pushes to `main`.
+check per job on every pull request, stacked ones included, and on pushes to `main`, plus a
+container build.
 
 The People API is mocked at the HTTP layer in the tests, so they need no network and no account.
 

@@ -1,0 +1,67 @@
+# Docker Compose / podman-compose example for ContactsMCP.
+#
+#   cp ../.env.example .env && $EDITOR .env      # (no quotes around values)
+#   mkdir -p secrets && ...                       # see "secrets" below
+#   podman unshare chown 1000:1000 secrets/*      # rootless Podman; Docker: chown 1000 or 0644
+#   docker compose up -d
+#
+# TLS is terminated by a reverse proxy in front of port 8000: see reverse-proxy.md.
+# The image's own HEALTHCHECK (/healthz) is inherited, nothing to add here.
+
+services:
+  contacts-mcp:
+    image: ghcr.io/<owner>/contacts-mcp:latest
+    restart: unless-stopped
+    ports:
+      # Bind to loopback when the reverse proxy runs on the same host.
+      - "127.0.0.1:8000:8000"
+    env_file: .env
+    environment:
+      # Secrets come from files (Compose secrets are mounted under /run/secrets/).
+      # Leave the matching plain variables unset in .env: setting both is a startup error.
+      GOOGLE_CLIENT_SECRETS_FILE: /run/secrets/google_client_secrets
+      CONTACTS_MCP_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
+      CONTACTS_MCP_JWT_SIGNING_KEY_FILE: /run/secrets/jwt_signing_key
+      # Behind a reverse proxy: its address as the container sees it. Through a published
+      # port that is often the container network's gateway rather than 127.0.0.1.
+      CONTACTS_MCP_TRUST_FORWARDED_HEADERS: "true"
+      CONTACTS_MCP_FORWARDED_ALLOW_IPS: "127.0.0.1"
+    volumes:
+      - contacts-data:/data    # account files (refresh tokens): back this up
+      - contacts-oauth:/oauth  # OAuth client registrations: disposable
+    secrets:
+      - google_client_secrets
+      - oidc_client_secret
+      - jwt_signing_key
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # The server writes only to /data and /oauth.
+    read_only: true
+    tmpfs: [/tmp]
+
+  # Link an account (one-shot; run it while the server is up, then `kill -HUP` it or
+  # restart). Interactive, so use `run`, not `up`:
+  #
+  #   docker compose run --rm -it contacts-mcp contacts-mcp auth add personal
+  #
+  # It prints a Google URL; open it anywhere, sign in, and paste back the URL the browser
+  # fails to load (http://127.0.0.1:.../?code=...). Then reload the running server:
+  #
+  #   docker compose kill -s HUP contacts-mcp
+  #
+  # Other commands: `auth list`, `auth remove <alias>`, `auth set-read-only <alias> on|off`.
+
+volumes:
+  contacts-data:
+  contacts-oauth:
+
+secrets:
+  # The Desktop-app OAuth client JSON downloaded from Google Cloud, and two plain-text files.
+  # They are mounted with the host file's owner and mode, and the server runs as uid 1000.
+  google_client_secrets:
+    file: ./secrets/google_client_secrets.json
+  oidc_client_secret:
+    file: ./secrets/oidc_client_secret
+  jwt_signing_key:
+    file: ./secrets/jwt_signing_key

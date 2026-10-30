@@ -45,7 +45,12 @@
       "groupName": "GitHub Actions"
     },
     {
-      "matchManagers": ["github-actions"],
+      "matchManagers": ["dockerfile"],
+      "pinDigests": true,
+      "groupName": "container base image"
+    },
+    {
+      "matchManagers": ["github-actions", "dockerfile"],
       "matchUpdateTypes": ["digest", "pinDigest"],
       "minimumReleaseAge": null,
       "description": "Renovate reports no release date for a digest update, so the soak would stay pending forever instead of holding anything back; the SHA pin and reading the diff are the guard."
@@ -54,6 +59,11 @@
       "matchPackageNames": ["python", "python/cpython"],
       "groupName": "python (mise, .python-version)",
       "description": "Keep mise.toml and .python-version on one version. `matchPackageNames` matches packageName: mise's entry resolves to `python/cpython`."
+    },
+    {
+      "matchPackageNames": ["uv", "astral-sh/uv", "ghcr.io/astral-sh/uv"],
+      "groupName": "uv (mise, images)",
+      "description": "Keep mise.toml and the container base image on one uv version."
     }
   ]
 }

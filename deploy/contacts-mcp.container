@@ -1,0 +1,68 @@
+# Podman Quadlet for ContactsMCP.
+#
+# Rootless: ~/.config/containers/systemd/contacts-mcp.container, then
+#   systemctl --user daemon-reload && systemctl --user start contacts-mcp
+# (and `loginctl enable-linger $USER` to keep it running after logout).
+# System-wide: /etc/containers/systemd/contacts-mcp.container, without --user.
+#
+# Podman secrets are optional: an EnvironmentFile= holding every secret (GOOGLE_CLIENT_ID /
+# GOOGLE_CLIENT_SECRET instead of the JSON) and bind mounts (Volume=/srv/...:/data:Z, owned by
+# uid 1000, mode 0700) work as well; see README, "Self-hosted over HTTP".
+#
+# Create the secrets once (the file with the Desktop-app client JSON, and two plain values):
+#   podman secret create google_client_secrets ./client_secret.json
+#   printf '%s' "<oidc client secret>" | podman secret create contacts_oidc_client_secret -
+#   openssl rand -base64 48 | tr -d '\n' | podman secret create contacts_jwt_signing_key -
+# The rest of the configuration goes in ~/.config/contacts-mcp/contacts-mcp.env (copy
+# .env.example; no quotes around values: systemd and podman keep them as part of the value).
+#
+# Link an account (one-shot, same data volume, while the server runs), then reload it:
+#   podman run --rm -it -v contacts-data:/data \
+#     --secret google_client_secrets,target=/run/secrets/google_client_secrets,uid=1000 \
+#     -e GOOGLE_CLIENT_SECRETS_FILE=/run/secrets/google_client_secrets \
+#     ghcr.io/<owner>/contacts-mcp:latest contacts-mcp auth add personal
+#   systemctl --user kill -s HUP contacts-mcp
+
+[Unit]
+Description=ContactsMCP (Google Contacts MCP server)
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=ghcr.io/<owner>/contacts-mcp:latest
+ContainerName=contacts-mcp
+# Pull new images with `podman auto-update` (podman-auto-update.timer).
+Label=io.containers.autoupdate=registry
+
+# TLS is terminated by a reverse proxy: publish on loopback only.
+PublishPort=127.0.0.1:8000:8000
+
+EnvironmentFile=%h/.config/contacts-mcp/contacts-mcp.env
+Environment=CONTACTS_MCP_TRUST_FORWARDED_HEADERS=true
+Environment=CONTACTS_MCP_FORWARDED_ALLOW_IPS=127.0.0.1
+
+# Secrets as files under /run/secrets/<name>, read through the *_FILE variables.
+Secret=google_client_secrets,type=mount,target=/run/secrets/google_client_secrets,uid=1000,mode=0400
+Secret=contacts_oidc_client_secret,type=mount,target=/run/secrets/oidc_client_secret,uid=1000,mode=0400
+Secret=contacts_jwt_signing_key,type=mount,target=/run/secrets/jwt_signing_key,uid=1000,mode=0400
+Environment=GOOGLE_CLIENT_SECRETS_FILE=/run/secrets/google_client_secrets
+Environment=CONTACTS_MCP_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc_client_secret
+Environment=CONTACTS_MCP_JWT_SIGNING_KEY_FILE=/run/secrets/jwt_signing_key
+
+# Named volumes, created on first start and initialised from the image (owned by uid 1000).
+Volume=contacts-data:/data
+Volume=contacts-oauth:/oauth
+
+# The image's HEALTHCHECK is used as is. Hardening:
+DropCapability=ALL
+NoNewPrivileges=true
+# The server writes only to /data and /oauth.
+ReadOnly=true
+Tmpfs=/tmp
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
