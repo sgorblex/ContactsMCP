@@ -463,6 +463,41 @@ and pushes it to GHCR as `:<version>` and `:latest` for `linux/amd64` and `linux
 Contributors (people and coding agents) follow [`AGENTS.md`](AGENTS.md): branches, commits,
 stacked PRs and which docs to update with each change.
 
+### Releasing to your own registry
+
+[`.woodpecker/release.yaml`](.woodpecker/release.yaml) is an optional second release path for
+[Woodpecker CI](https://woodpecker-ci.org/). It does not replace the GHCR release, which runs
+either way. On each release tag it builds the image for the agent's architecture and pushes it to
+your registry as `:<version>` and `:production`. It then logs in to your server over SSH, pulls
+`:production` and restarts the service, so the server's unit should run `:production`. A
+pre-release such as `1.2.0-rc.1` gets its version tag only and is not deployed. To roll back,
+point `:production` at an older version and restart the unit.
+
+The repository must be marked *trusted* in Woodpecker, because the build uses the agent's Docker
+socket. Everything else is configured with repository secrets:
+
+| Secret | Value |
+| --- | --- |
+| `registry` | Registry host, e.g. `registry.example.com` |
+| `registry_user`, `registry_password` | A registry user that can push |
+| `registry_image` | Image path in the registry, e.g. `contacts/mcp` |
+| `deploy_host` | `user@host` to deploy as, e.g. `deploy@contacts.example.com` |
+| `deploy_ssh_key` | The private half of that user's SSH key |
+| `deploy_known_hosts` | The server's host key line, as in `known_hosts` |
+| `deploy_unit` | The systemd unit to restart, e.g. `contacts-mcp` |
+
+Restrict the deploy SSH key with `restrict` in its `authorized_keys`, and allow the deploy user
+exactly these three commands in sudoers (with your values, and absolute paths to `podman` and
+`systemctl`):
+
+```
+sudo podman login '<registry>' -u '<registry_user>' --password-stdin
+sudo podman pull '<registry>/<registry_image>:production'
+sudo systemctl restart '<deploy_unit>'
+```
+
+If you only want the image pushed, without the SSH deploy, delete the `deploy` step.
+
 ## License
 
 [GPL-3.0-or-later](LICENSE).

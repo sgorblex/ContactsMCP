@@ -1,0 +1,52 @@
+# Optional: release to a self-hosted registry and deploy over SSH, for Woodpecker CI. The GitHub
+# Actions release (GHCR) runs either way. A `v*` tag builds the image for the agent's
+# architecture, pushes :<version> and the moving :production tag, then deploys. Configuration is
+# all in repo secrets (README, "Releasing to your own registry"). Needs the repo marked "trusted"
+# on the Woodpecker server for the docker socket volume. Without a deploy target, drop the deploy
+# step.
+when:
+  - event: tag
+    ref: refs/tags/v*
+
+steps:
+  - name: build-push
+    image: docker:29-cli@sha256:1a4c7cb63513f349bdad01fcc6e0f3f2f67d37b9da86f14dc0d4a0942eecda00
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      REGISTRY:
+        from_secret: registry
+      REGISTRY_USER:
+        from_secret: registry_user
+      REGISTRY_PASSWORD:
+        from_secret: registry_password
+      REGISTRY_IMAGE:
+        from_secret: registry_image
+    commands:
+      - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+      # The scripts are bash; docker:29-cli ships busybox ash only.
+      - apk add --no-cache bash
+      - scripts/release-push.sh
+
+  - name: deploy
+    image: alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+    environment:
+      REGISTRY:
+        from_secret: registry
+      REGISTRY_USER:
+        from_secret: registry_user
+      REGISTRY_PASSWORD:
+        from_secret: registry_password
+      REGISTRY_IMAGE:
+        from_secret: registry_image
+      DEPLOY_HOST:
+        from_secret: deploy_host
+      DEPLOY_SSH_KEY:
+        from_secret: deploy_ssh_key
+      DEPLOY_KNOWN_HOSTS:
+        from_secret: deploy_known_hosts
+      DEPLOY_UNIT:
+        from_secret: deploy_unit
+    commands:
+      - apk add --no-cache bash openssh-client
+      - scripts/ssh-deploy.sh
