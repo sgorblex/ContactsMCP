@@ -216,6 +216,8 @@ def test_add_paste_flow(
     assert saved.linked_at.tzinfo is not None
     assert saved.linked_at.utcoffset() == UTC.utcoffset(None)
     assert "me@example.com" in result.out
+    assert "SIGHUP" in result.out
+    assert "podman kill --signal HUP" in result.out
     # the instructions mention what to do on the can't-connect page
     assert "address bar" in result.out
     assert_no_secrets(result.out, result.err)
@@ -740,6 +742,7 @@ def test_remove_revokes_and_deletes(
     }
     captured = capsys.readouterr()
     assert "Revoked" in captured.out
+    assert "SIGHUP" in captured.out
     assert_no_secrets(captured.out, captured.err)
 
 
@@ -811,6 +814,7 @@ def test_set_read_only(store: AccountFileStore, capsys: pytest.CaptureFixture[st
     assert store.load("work").read_only is True
     out = capsys.readouterr().out
     assert "now read-only" in out
+    assert "SIGHUP" in out
 
     assert auth_cli.main(["set-read-only", "work", "off"]) == 0
     loaded = store.load("work")

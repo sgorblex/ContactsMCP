@@ -6,8 +6,11 @@ Claude Code or any other MCP client, and let the assistant search, read, create 
 contacts.
 
 Contents: [1. What it does](#1-what-it-does) · [2. Google Cloud setup](#2-google-cloud-setup) ·
-[3. Linking accounts](#3-linking-accounts) · [Configuration](#configuration) ·
-[Read-only accounts](#read-only-accounts) · [Development](#development) · [License](#license)
+[3. Identity provider setup](#3-identity-provider-setup) ·
+[4. Linking accounts](#4-linking-accounts) · [5. Running it](#5-running-it) ·
+[6. Connecting a client](#6-connecting-a-client) · [Configuration](#configuration) ·
+[Tool exposure](#tool-exposure) · [Read-only accounts](#read-only-accounts) ·
+[Security](#security) · [Development](#development) · [License](#license)
 
 ## 1. What it does
 
@@ -86,9 +89,87 @@ by client ID). If every account you want to link belongs to one Workspace organi
 instead choose the **Internal** audience on the consent screen: no publishing, no warning, and
 no 7-day token expiry, but only that organization's accounts can sign in.
 
-## 3. Linking accounts
+## 3. Identity provider setup
 
-Accounts are linked with the `contacts-mcp auth …` command. It works headless, with no tunnel. The alias is yours to pick: lowercase letters, digits and `-`,
+Only for the HTTP deployment. claude.ai custom connectors cannot send a static token, so the
+server authenticates MCP clients with OAuth and delegates the actual sign-in to an OpenID
+Connect (OIDC) provider **you** choose. Over stdio there is no authentication and none of this
+applies.
+
+What any OIDC provider needs:
+
+- A **confidential client** (it has a client secret) for this server.
+- The redirect URI **`<base_url>/auth/callback`**, for example
+  `https://contacts.example.com/auth/callback`, matching `CONTACTS_MCP_BASE_URL` exactly.
+- The scopes **`openid email offline_access`** (the server requests these regardless of what the
+  MCP client asks for), with **refresh tokens enabled** for the client. Some providers need
+  `offline_access` switched on explicitly.
+- A discovery document (`…/.well-known/openid-configuration`), whose URL goes into
+  `CONTACTS_MCP_OIDC_CONFIG_URL`, plus the client ID and secret.
+- A way to identify you in `CONTACTS_MCP_ALLOWED_USERS`: your e-mail address, matched only when
+  the provider marks it verified (the `email_verified` claim), or your `sub` value.
+
+### authentik
+
+1. *Applications → Providers → Create → OAuth2/OpenID Provider.* Client type **Confidential**.
+   Note the client ID and secret.
+2. **Redirect URIs/Origins**: strict match `https://contacts.example.com/auth/callback`.
+3. **Scopes**: select the default `openid` and `email` mappings and the
+   **`offline_access`** one (*authentik default OAuth Mapping: OpenID 'offline_access'*).
+4. **Signing Key**: pick a certificate/key pair, so tokens are signed with RS256 rather than with
+   the client secret.
+5. Leave refresh token validity at its default or set it as you like.
+6. *Applications → Applications → Create*, choose the provider and a slug, say `contacts-mcp`,
+   and restrict who may open it with a policy or group binding if you want.
+7. Use the discovery URL of that application:
+
+```sh
+CONTACTS_MCP_OIDC_CONFIG_URL=https://auth.example.com/application/o/contacts-mcp/.well-known/openid-configuration
+CONTACTS_MCP_OIDC_CLIENT_ID=<client id>
+CONTACTS_MCP_OIDC_CLIENT_SECRET=<client secret>
+CONTACTS_MCP_ALLOWED_USERS=<your authentik sub>
+```
+
+**Allow by `sub`, not e-mail.** authentik's default `email` scope mapping always sends
+`"email_verified": false`, so an e-mail entry in `CONTACTS_MCP_ALLOWED_USERS` never matches.
+List your `sub` instead: with the provider's default subject mode it is the hashed user ID, and
+a refused sign-in logs it (`contacts_mcp.oidc` logger, "sign-in refused"). Alternatively, use a
+custom email mapping that returns `email_verified: true` for addresses authentik has verified.
+
+### Google as the identity provider
+
+You need a second OAuth client for the sign-in, separate from the Desktop client of section 2.
+
+1. In the same Cloud project (or another): *Credentials → Create credentials → OAuth client ID →
+   Application type **Web application***. Under *Authorized redirect URIs* add
+   `https://contacts.example.com/auth/callback`.
+2. Use these settings:
+
+```sh
+CONTACTS_MCP_OIDC_CONFIG_URL=https://accounts.google.com/.well-known/openid-configuration
+CONTACTS_MCP_OIDC_CLIENT_ID=<web client id>
+CONTACTS_MCP_OIDC_CLIENT_SECRET=<web client secret>
+CONTACTS_MCP_OIDC_UPSTREAM_SCOPES=openid email
+CONTACTS_MCP_OIDC_EXTRA_AUTHORIZE_PARAMS=access_type=offline&prompt=consent
+CONTACTS_MCP_OIDC_VERIFY_ID_TOKEN=true
+CONTACTS_MCP_ALLOWED_USERS=you@example.com
+```
+
+Why the three extra lines: Google rejects `offline_access` as a scope and issues a refresh token
+only for `access_type=offline` (with `prompt=consent` so it does so on every sign-in), and its
+access tokens are opaque, so the server verifies the signed ID token instead. (This is about
+signing in to the MCP server; the Google accounts you link for contacts keep their own refresh
+tokens either way.)
+
+**`CONTACTS_MCP_ALLOWED_USERS` is essential with a public provider.** Google lets anyone with a
+Google account complete the sign-in. Without the server-side allowlist, any of them could
+connect to your server and read your contacts. HTTP mode therefore refuses to start without it.
+With a private provider the allowlist is a second line of defence.
+
+## 4. Linking accounts
+
+Accounts are linked with the `contacts-mcp auth …` command. It works headless, with no tunnel,
+and while the server is running. The alias is yours to pick: lowercase letters, digits and `-`,
 up to 32 characters (`personal`, `work`).
 
 Each linked account is a file `accounts/<alias>.json` in the data directory
@@ -140,9 +221,83 @@ contacts-mcp auth set-read-only personal on     # or off
 contacts-mcp auth remove personal               # also revokes the token at Google, best effort
 ```
 
+A running server reads the account files at startup and again on **`SIGHUP`**: after adding,
+removing or changing an account, send it one (`kill -HUP <pid>`) or restart it. A file that
+cannot be read never crashes the server; it is reported by the `accounts` tool.
+
 If Google revokes a refresh token (you removed the app's access in your Google account, or the
 token went unused for too long), the tools say so and name the command to run: `auth add <alias>`
 again for that alias.
+
+## 5. Running it
+
+### Locally over stdio
+
+No authentication, no HTTP: the client starts the server as a subprocess. Link an account first
+(section 4) and have `GOOGLE_CLIENT_SECRETS_FILE` (or the ID/secret pair) in the environment.
+
+Claude Code:
+
+```sh
+claude mcp add contacts \
+  -e GOOGLE_CLIENT_SECRETS_FILE=/path/to/client_secret.json \
+  -- uv run --directory /path/to/ContactsMCP contacts-mcp
+```
+
+Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "contacts": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/ContactsMCP", "contacts-mcp"],
+      "env": {
+        "GOOGLE_CLIENT_SECRETS_FILE": "/path/to/client_secret.json"
+      }
+    }
+  }
+}
+```
+
+To look at the tools without a chat client, use the MCP Inspector:
+
+```sh
+npx @modelcontextprotocol/inspector mise exec -- uv run contacts-mcp
+```
+
+or `mise exec -- uv run python scripts/list_tools_stdio.py`, which prints the tool names and annotations.
+
+### Over HTTP
+
+With `CONTACTS_MCP_TRANSPORT=http` the server speaks streamable HTTP on
+`CONTACTS_MCP_HOST:CONTACTS_MCP_PORT` (default `0.0.0.0:8000`) at `/mcp`, and refuses to start
+without the identity provider settings (section 3) and the user allowlist: there is no insecure
+mode. Put it behind a reverse proxy that terminates TLS, and set `CONTACTS_MCP_BASE_URL` to the
+public URL.
+
+`/healthz` answers without authentication: the process is up and the account files are
+readable (no Google call; `?deep=1` also tries a token refresh per account). It reports counts
+only; the aliases of accounts needing attention go to the log.
+
+## 6. Connecting a client
+
+**claude.ai**: *Settings → Connectors → Add custom connector*, name it, and enter
+`https://contacts.example.com/mcp`. Claude sends you to your identity provider to sign in, and
+back.
+
+**Claude Code**:
+
+```sh
+claude mcp add --transport http contacts https://contacts.example.com/mcp
+```
+
+Then run `/mcp` inside Claude Code and choose *Authenticate*: the OAuth login opens in your
+browser.
+
+Any other MCP client that supports OAuth 2.1 with dynamic client registration works too, provided
+its redirect URI is allowed (`CONTACTS_MCP_ALLOWED_REDIRECT_URIS`; by default claude.ai, claude.com
+and Claude Code's loopback callback). Whoever signs in must be in `CONTACTS_MCP_ALLOWED_USERS`.
 
 ## Configuration
 
@@ -154,8 +309,38 @@ secrets), not both.
 | --- | --- | --- |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (`_FILE`) | | The Desktop-app client. Or: |
 | `GOOGLE_CLIENT_SECRETS_FILE` | | the downloaded Desktop-app JSON |
+| `CONTACTS_MCP_TRANSPORT` | `stdio` | `stdio` or `http` |
 | `CONTACTS_MCP_DATA_DIR` | `$XDG_DATA_HOME/contacts-mcp` (`~/.local/share/…`) | account files |
+| `CONTACTS_MCP_SERVER_NAME` | `contacts` | |
+| `CONTACTS_MCP_EXPOSED_TOOLS` | `all` | see [Tool exposure](#tool-exposure) |
 | `CONTACTS_MCP_LOG_LEVEL` | `INFO` | JSON lines on stderr |
+| `CONTACTS_MCP_HOST`, `CONTACTS_MCP_PORT` | `0.0.0.0`, `8000` | HTTP |
+| `CONTACTS_MCP_BASE_URL` | required (HTTP) | public URL, e.g. `https://contacts.example.com` |
+| `CONTACTS_MCP_OIDC_CONFIG_URL` | required (HTTP) | OIDC discovery URL |
+| `CONTACTS_MCP_OIDC_CLIENT_ID`, `CONTACTS_MCP_OIDC_CLIENT_SECRET` (`_FILE`) | required (HTTP) | |
+| `CONTACTS_MCP_JWT_SIGNING_KEY` (`_FILE`) | required (HTTP) | at least 32 characters |
+| `CONTACTS_MCP_ALLOWED_USERS` | required (HTTP) | e-mails and/or `sub` values, comma-separated |
+| `CONTACTS_MCP_ALLOWED_REDIRECT_URIS` | claude.ai, claude.com, loopback | comma-separated, `:*` is a port wildcard |
+| `CONTACTS_MCP_OIDC_UPSTREAM_SCOPES` | `openid email offline_access` | |
+| `CONTACTS_MCP_OIDC_EXTRA_AUTHORIZE_PARAMS` | | extra provider parameters, `key=value&key=value` (not `scope`) |
+| `CONTACTS_MCP_OIDC_VERIFY_ID_TOKEN` | `false` | verify the ID token instead of the access token (Google) |
+| `CONTACTS_MCP_TRUST_FORWARDED_HEADERS` | `false` | trust `X-Forwarded-*` |
+| `CONTACTS_MCP_FORWARDED_ALLOW_IPS` | `127.0.0.1` | proxies trusted for `X-Forwarded-*` |
+| `FASTMCP_HOME` | `~/.local/share/fastmcp` | OAuth state |
+
+## Tool exposure
+
+`CONTACTS_MCP_EXPOSED_TOOLS` decides which tools the server offers at all, so a deployment that
+should only read cannot be talked into writing:
+
+```sh
+CONTACTS_MCP_EXPOSED_TOOLS=all                                  # default
+CONTACTS_MCP_EXPOSED_TOOLS=read-only                            # only read tools
+CONTACTS_MCP_EXPOSED_TOOLS=read-only+create_contact,add_to_group   # read tools plus these
+CONTACTS_MCP_EXPOSED_TOOLS=all-delete_contact,delete_group      # everything except these
+```
+
+An unknown tool name stops the server at startup, and the startup log lists the hidden tools.
 
 ## Read-only accounts
 
@@ -168,6 +353,13 @@ contacts-mcp auth set-read-only work on
 Write tools then refuse on that account (and the refusal is audit-logged), while reads keep
 working.
 
+## Security
+
+See [SECURITY.md](SECURITY.md) for the threat model and how to report a vulnerability. In short:
+HTTP mode always requires OAuth and a user allowlist; refresh tokens live in the data directory
+with mode 0600; contact text is treated as untrusted; every write attempt is logged as an audit
+line.
+
 ## Development
 
 Tools: [uv](https://docs.astral.sh/uv/) and Python 3.14. [mise](https://mise.jdx.dev/) pins uv
@@ -176,6 +368,7 @@ and the Python minor version, and defines the tasks; plain `uv` works the same.
 | mise | plain uv |
 | --- | --- |
 | `mise run setup` | `uv sync --locked` |
+| `mise run dev` | `CONTACTS_MCP_DATA_DIR=.local/data uv run contacts-mcp` |
 | `mise run check` | `uv run ruff check . && uv run ruff format --check . && uv run mypy` |
 | `mise run fix` | `uv run ruff check --fix . && uv run ruff format .` |
 | `mise run test` | `uv run pytest` |

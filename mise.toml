@@ -9,6 +9,11 @@ _.python.venv = { path = ".venv", create = false }
 description = "Install the project and dev dependencies into .venv"
 run = "uv sync --locked"
 
+[tasks.dev]
+description = "Run the server over stdio with a local data dir (./.local/data)"
+run = "uv run contacts-mcp"
+env = { CONTACTS_MCP_DATA_DIR = ".local/data" }
+
 [tasks.check]
 description = "Lint, format check and type check"
 run = [

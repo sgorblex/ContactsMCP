@@ -41,6 +41,11 @@ from contacts_mcp.google.oauth import AUTH_URL, REVOKE_URL, TOKEN_URL
 #: address comes back in the ID token (`contacts` does not allow reading it from
 #: people/me, which answers 403).
 LINK_SCOPES = (*SCOPES, "openid", "email")
+SIGHUP_HINT = (
+    "A running server picks this up on SIGHUP (or restart): "
+    "`podman kill --signal HUP <container>`, `docker kill --signal HUP <container>` "
+    "or `kill -HUP <pid>`."
+)
 #: The ``iss`` of Google's ID tokens.
 GOOGLE_ISSUERS = ("https://accounts.google.com", "accounts.google.com")
 
@@ -271,6 +276,7 @@ def _cmd_add(alias: str, args: argparse.Namespace) -> int:
         + (" (read-only)" if read_only else "")
         + f". Saved to {path}."
     )
+    _say(SIGHUP_HINT)
     return EXIT_OK
 
 
@@ -624,6 +630,7 @@ def _cmd_remove(alias: str, *, revoke: bool) -> int:
     except AccountFileError as e:
         raise AuthError(str(e)) from None
     _say(f"Removed '{alias}'.")
+    _say(SIGHUP_HINT)
     return EXIT_OK
 
 
@@ -641,4 +648,5 @@ def _cmd_set_read_only(alias: str, *, on: bool) -> int:
     except (OSError, AccountFileError) as e:
         raise AuthError(f"cannot write the account file: {_reason(e)}") from None
     _say(f"'{alias}' is now {'read-only' if on else 'read-write'}.")
+    _say(SIGHUP_HINT)
     return EXIT_OK
