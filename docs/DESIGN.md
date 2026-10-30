@@ -22,7 +22,7 @@ configuration are in the [README](../README.md).
 | `normalize.py` | People API JSON → `ContactSummary` / `Contact` / `OtherContact` / `Group` (read direction); values from the person's Google profile listed as `from_profile` |
 | `accounts.py` | `AccountFileStore`: one JSON file per alias, written atomically, 0600 in a 0700 directory |
 | `registry.py` | `AccountRegistry` / `Account`: routing by alias, per-account mutation lock, search warm-up, group-name cache, `reload()` |
-| `linking.py` | The Google side of linking: PKCE, consent URL, code exchange and grant checks, revoke; used by the auth CLI |
+| `linking.py` | The Google side of linking: PKCE, consent URL, code exchange and grant checks, revoke; shared by the CLI and the settings page |
 | `auth_cli.py` | `auth add / list / remove / set-read-only` |
 | `tools/_common.py` | Tool annotations, shared description notes, `write_attempt()` (account check, lock, audit) |
 | `tools/read.py` | `accounts`, `search_contacts`, `list_contacts`, `get_contact` |
@@ -34,7 +34,7 @@ configuration are in the [README](../README.md).
 | `server.py` | `build_server(settings, registry)`: instructions, tools, exposure, audit middleware, `/healthz`, `SIGHUP`, HTTP options; `main()` |
 | `oidc.py` | `AllowlistOIDCProxy(OIDCProxy)`: upstream identity claims and the user allowlist |
 | `web/session.py` | The settings page's sign-in: OIDC in the browser, sessions, step-up |
-| `web/settings.py` | The `/settings` routes: account list, read-only, remove; forgery checks |
+| `web/settings.py` | The `/settings` routes: account list, read-only, remove, link and re-link; forgery checks |
 | `web/page.py` | HTML layout and the headers every page is sent with |
 
 Every tool module exposes `register(mcp: FastMCP, registry: AccountRegistry) -> None`;
@@ -68,7 +68,9 @@ everything at the HTTP layer with `respx`.
 ## Accounts
 
 - An account is `<data_dir>/accounts/<alias>.json`, alias `[a-z0-9][a-z0-9-]{0,31}`: the refresh
-  token, the e-mail, the scopes granted and the `read_only` flag. Files are written atomically
+  token, the e-mail, the scopes granted, the `read_only` flag and `client`, the Google client
+  that linked it (`desktop`, the default, or `web` for the settings page), which the registry
+  refreshes it with. Files are written atomically
   (temp file in the same directory, fsync, rename), so they back up safely while the server runs.
 - `AccountRegistry.reload()` reads every file and never raises: an unreadable file becomes an
   `unreadable` account, reported rather than fatal. An account whose refresh token is unchanged
@@ -242,10 +244,15 @@ their own:
 - **Forgery.** POSTs need `Origin` equal to the base URL (or, without `Origin`,
   `Sec-Fetch-Site: same-origin`) and the session's CSRF token; fastmcp's Host/Origin guard
   covers the whole app as well.
-- **Step-up.** Removing an account needs a sign-in within 10 minutes. Otherwise the browser
-  goes back to the provider with `max_age=60` (not `prompt=login`, which Google refuses, nor
-  `max_age=0`, which some providers ignore); an `auth_time` more than 60 s older than that
-  request, or none, is refused.
+- **Linking.** With the optional Web application client (`GOOGLE_WEB_CLIENT_*`), the page runs
+  `linking.py`'s flow with redirect `/settings/google/callback`. The pending link (PKCE
+  verifier, alias, read-only choice) is keyed by `state` and bound to the session's CSRF token,
+  so only the session that started it can finish it. A Desktop client cannot be used here:
+  Google only lets it redirect to loopback addresses.
+- **Step-up.** Removing or re-linking an account needs a sign-in within 10 minutes. Otherwise
+  the browser goes back to the provider with `max_age=60` (not `prompt=login`, which Google
+  refuses, nor `max_age=0`, which some providers ignore); an `auth_time` more than 60 s older
+  than that request, or none, is refused.
 - **Changes.** Through `AccountFileStore`, then `registry.reload()`, then an audit line with
   `tool` set to `settings.<action>` and the page's user.
 

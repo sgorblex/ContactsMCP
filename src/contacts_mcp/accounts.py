@@ -16,7 +16,7 @@ import re
 import secrets
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
@@ -54,6 +54,9 @@ class AccountRecord(BaseModel):
     scopes: list[str] = Field(default_factory=list)
     read_only: bool = False
     linked_at: datetime
+    #: Which Google client linked the account, and so refreshes its token: the Desktop app
+    #: one (the CLI) or the Web application one (the settings page).
+    client: Literal["desktop", "web"] = "desktop"
 
 
 class AccountFileStore:
@@ -86,6 +89,7 @@ class AccountFileStore:
             "scopes": list(record.scopes),
             "read_only": record.read_only,
             "linked_at": linked_at.astimezone(UTC).isoformat(),
+            "client": record.client,
         }
         data = (json.dumps(payload, indent=2) + "\n").encode()
 

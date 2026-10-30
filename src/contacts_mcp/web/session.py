@@ -76,6 +76,8 @@ class PendingSignIn:
     return_to: str
     step_up: bool
     created: float
+    #: Shown on the first page after the sign-in.
+    notice: str | None = None
 
 
 class Expiring[T]:
@@ -165,13 +167,17 @@ class BrowserSignIn:
             return None
         return session
 
-    def start(self, return_to: str, *, step_up: bool = False) -> RedirectResponse:
+    def start(
+        self, return_to: str, *, step_up: bool = False, notice: str | None = None
+    ) -> RedirectResponse:
         """Send the browser to the provider; ``step_up`` makes it ask for the login again."""
         if not return_to.startswith(PREFIX):
             return_to = PREFIX
         pkce = new_pkce()
         state = new_state()
-        self._pending.put(state, PendingSignIn(pkce.verifier, return_to, step_up, time.time()))
+        self._pending.put(
+            state, PendingSignIn(pkce.verifier, return_to, step_up, time.time(), notice)
+        )
         params = {
             "client_id": self.settings.oidc_client_id,
             "redirect_uri": self.redirect_uri,
@@ -246,7 +252,8 @@ class BrowserSignIn:
             )
 
         self.sessions.delete(request.cookies.get(SESSION_COOKIE))
-        token, _ = self.sessions.create(claims, authenticated_at)
+        token, session = self.sessions.create(claims, authenticated_at)
+        session.notice = pending.notice
         response.delete_cookie(SIGNIN_COOKIE, path="/", secure=True, httponly=True)
         response.set_cookie(
             SESSION_COOKIE,

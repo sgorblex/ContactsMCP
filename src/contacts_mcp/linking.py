@@ -1,4 +1,4 @@
-"""The Google side of linking an account, for the auth CLI.
+"""The Google side of linking an account, shared by the auth CLI and the settings page.
 
 Authorization code flow with PKCE: :func:`authorization_url` sends the browser to Google's
 consent screen, and :func:`complete_link` turns the code Google redirects back with into a
@@ -84,6 +84,8 @@ def authorization_url(
     redirect_uri: str,
     state: str,
     challenge: str,
+    *,
+    login_hint: str | None = None,
 ) -> str:
     params = {
         "client_id": client.client_id,
@@ -97,6 +99,8 @@ def authorization_url(
         "code_challenge": challenge,
         "code_challenge_method": "S256",
     }
+    if login_hint:
+        params["login_hint"] = login_hint
     return f"{AUTH_URL}?{urlencode(params)}"
 
 

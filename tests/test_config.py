@@ -13,6 +13,7 @@ from contacts_mcp.config import (
     ConfigError,
     load_data_dir,
     load_google_client,
+    load_google_web_client,
     load_settings,
 )
 
@@ -47,6 +48,44 @@ def test_google_client_from_desktop_app_json(tmp_path: Path) -> None:
     client = load_google_client({"GOOGLE_CLIENT_SECRETS_FILE": str(path)})
     assert client.client_id == "id.apps"
     assert client.client_secret.get_secret_value() == "s"
+
+
+def test_no_web_client_by_default() -> None:
+    assert load_google_web_client({}) is None
+
+
+def test_web_client_from_id_and_secret() -> None:
+    client = load_google_web_client(
+        {"GOOGLE_WEB_CLIENT_ID": "web-id", "GOOGLE_WEB_CLIENT_SECRET": "web-secret"}
+    )
+    assert client is not None
+    assert client.client_id == "web-id"
+    assert client.client_secret.get_secret_value() == "web-secret"
+
+
+def test_web_client_from_json(tmp_path: Path) -> None:
+    path = _secrets_file(tmp_path, {"web": {"client_id": "web.apps", "client_secret": "s"}})
+    client = load_google_web_client({"GOOGLE_WEB_CLIENT_SECRETS_FILE": str(path)})
+    assert client is not None
+    assert client.client_id == "web.apps"
+
+
+def test_desktop_json_as_the_web_client_is_rejected(tmp_path: Path) -> None:
+    path = _secrets_file(tmp_path, {"installed": {"client_id": "id", "client_secret": "s"}})
+    with pytest.raises(ConfigError, match=r"'Desktop app' client.*'Web application'"):
+        load_google_web_client({"GOOGLE_WEB_CLIENT_SECRETS_FILE": str(path)})
+
+
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
+        ({"GOOGLE_WEB_CLIENT_ID": "id"}, "GOOGLE_WEB_CLIENT_SECRET is required"),
+        ({"GOOGLE_WEB_CLIENT_SECRET": "s"}, "GOOGLE_WEB_CLIENT_ID is required"),
+    ],
+)
+def test_incomplete_web_client(env: dict[str, str], message: str) -> None:
+    with pytest.raises(ConfigError, match=message):
+        load_google_web_client(env)
 
 
 def test_web_client_json_is_rejected(tmp_path: Path) -> None:

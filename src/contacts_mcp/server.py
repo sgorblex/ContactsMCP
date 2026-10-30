@@ -24,7 +24,13 @@ from starlette.responses import PlainTextResponse
 
 from contacts_mcp import __version__
 from contacts_mcp.accounts import AccountFileError, AccountFileStore
-from contacts_mcp.config import ConfigError, Settings, load_google_client, load_settings
+from contacts_mcp.config import (
+    ConfigError,
+    Settings,
+    load_google_client,
+    load_google_web_client,
+    load_settings,
+)
 from contacts_mcp.errors import AccountError, ContactsError, InvalidArgumentError, NeedsRelinkError
 from contacts_mcp.exposure import apply_exposure, is_read_only, registered_tools
 from contacts_mcp.logs import AuditOutcome, audit, audit_scope, configure_logging
@@ -375,6 +381,7 @@ def main() -> None:
     try:
         settings = load_settings()
         google = load_google_client()
+        web_google = load_google_web_client()
     except ConfigError as e:
         _fail(e)
     configure_logging(settings.log_level)
@@ -382,7 +389,9 @@ def main() -> None:
     http = httpx.AsyncClient(
         timeout=HTTP_TIMEOUT, headers={"User-Agent": f"contacts-mcp/{__version__}"}
     )
-    registry = AccountRegistry(AccountFileStore(settings.data_dir), google, http)
+    registry = AccountRegistry(
+        AccountFileStore(settings.data_dir), google, http, web_google=web_google
+    )
     registry.reload()
     try:
         mcp = build_server(settings, registry, close_http=True)

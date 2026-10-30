@@ -21,10 +21,12 @@ defends, and against whom:
   allowlist. Sessions are random tokens in a `__Host-` cookie (`Secure`, `HttpOnly`,
   `SameSite=Lax`), kept server-side only as their hash, ending after 30 idle minutes or 12
   hours. Every POST must carry the session's CSRF token and come from the server's own origin
-  (`Origin`, else `Sec-Fetch-Site: same-origin`). Removing an account needs a sign-in from the
-  last 10 minutes, otherwise a new login at the provider, checked by the ID token's
-  `auth_time`. Pages have no scripts and a strict Content Security Policy. Each change is
-  audited. MCP tools cannot change account settings.
+  (`Origin`, else `Sec-Fetch-Site: same-origin`). Removing or re-linking an account needs a
+  sign-in from the last 10 minutes, otherwise a new login at the provider, checked by the ID
+  token's `auth_time`. Linking uses Google's authorization code flow with PKCE, and Google's
+  redirect back is accepted only by the session that started it. Pages have no scripts and a
+  strict Content Security Policy. Each change is audited. MCP tools cannot change account
+  settings.
 - **Secrets at rest.** Google refresh tokens are stored in the data directory
   (`accounts/<alias>.json`, files 0600, directory 0700, written atomically), unencrypted:
   protect the volume and its backups like a password store. Access tokens are kept in memory

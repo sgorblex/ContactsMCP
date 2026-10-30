@@ -60,7 +60,9 @@ all, is third-party data: the server tells the model to treat it as data, never 
 
 ## 2. Google Cloud setup
 
-One Google Cloud OAuth client is shared by all the accounts you link.
+One Google Cloud OAuth client is shared by all the accounts you link with the CLI. Linking
+from the [settings page](#settings-page) needs a second one, of type *Web application*
+(step 6).
 
 1. In the [Google Cloud console](https://console.cloud.google.com/) create a project (or pick
    one).
@@ -79,6 +81,15 @@ One Google Cloud OAuth client is shared by all the accounts you link.
 5. **Create the client**: *Credentials → Create credentials → OAuth client ID → Application type
    **Desktop app***. Download the JSON. It is a secret: keep it out of the repository (the
    `.gitignore` already excludes `client_secret*.json`).
+
+6. **Optional, for the settings page**: *Credentials → Create credentials → OAuth client ID →
+   Application type **Web application***, in the same project. Under *Authorized redirect URIs*
+   add `<base_url>/settings/google/callback`, for example
+   `https://contacts.example.com/settings/google/callback`. Give it to the server as
+   `GOOGLE_WEB_CLIENT_ID` and `GOOGLE_WEB_CLIENT_SECRET` (`…_FILE` too), or as
+   `GOOGLE_WEB_CLIENT_SECRETS_FILE` (the downloaded JSON, with its `web` key). Each account
+   file records which client linked it, and the server refreshes it with that client: keep the
+   Web client configured as long as accounts linked from the page exist.
 
 Give the server the client either as `GOOGLE_CLIENT_SECRETS_FILE=/path/to/client_secret.json`
 (the downloaded file with its `installed` key; a *Web application* client is rejected with a
@@ -263,9 +274,17 @@ Over HTTP, the server can also show the linked accounts on a web page, at
 You sign in at the same identity provider as MCP clients, and only users in
 `CONTACTS_MCP_ALLOWED_USERS` get in. The page lists each account with its e-mail, status
 (OK, needs re-link, unreadable), access and link date. You can make an account read-only or
-writable again, and remove it, which also revokes its grant at Google. Removing needs a sign-in
-from the last 10 minutes: otherwise the page sends you to the provider to sign in again first.
-Changes apply to the running server at once, with no `SIGHUP`, and each one leaves an audit line.
+writable again, and remove it, which also revokes its grant at Google.
+
+With the optional Web application client (section 2, step 6), you can also link an account:
+enter an alias, tick *Read-only* if you want, and press *Link with Google*. Google's consent
+screen opens and sends you back to the page with the account linked. *Re-link* does the same
+for an existing alias (a revoked token, another Google account), keeping its read-only setting.
+Without that client, link with the CLI: the page shows the result at once.
+
+Removing and re-linking need a sign-in from the last 10 minutes: otherwise the page sends you to
+the provider to sign in again first. Changes apply to the running server at once, with no
+`SIGHUP`, and each one leaves an audit line.
 
 The session lasts 30 minutes without use, 12 hours at most, and ends when the server restarts.
 
@@ -394,6 +413,8 @@ secrets), not both. [`.env.example`](.env.example) is the commented template.
 | --- | --- | --- |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (`_FILE`) | | The Desktop-app client. Or: |
 | `GOOGLE_CLIENT_SECRETS_FILE` | | the downloaded Desktop-app JSON |
+| `GOOGLE_WEB_CLIENT_ID`, `GOOGLE_WEB_CLIENT_SECRET` (`_FILE`) | | optional Web-application client, for linking on the settings page. Or: |
+| `GOOGLE_WEB_CLIENT_SECRETS_FILE` | | its downloaded JSON |
 | `CONTACTS_MCP_TRANSPORT` | `stdio` (`http` in the image) | `stdio` or `http` |
 | `CONTACTS_MCP_DATA_DIR` | `$XDG_DATA_HOME/contacts-mcp` (`~/.local/share/…`; `/data` in the image) | account files |
 | `CONTACTS_MCP_SERVER_NAME` | `contacts` | |
