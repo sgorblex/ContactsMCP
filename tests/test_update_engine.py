@@ -99,6 +99,76 @@ def test_add_existing_email_is_a_noop() -> None:
     assert plan.changes == []
 
 
+def test_add_existing_email_with_another_type_changes_its_type() -> None:
+    p = ada()
+    p["emailAddresses"][0]["formattedType"] = "Home"
+    plan = plan_update(
+        p, ContactOps(emails=ListOps(add=[Email(value="ADA@example.com", type="work")]))
+    )
+    assert plan.update_fields == ["emailAddresses"]
+    new = plan.fields["emailAddresses"]
+    assert len(new) == 2  # no second copy of the address
+    assert new[0]["value"] == "ada@example.com"  # the existing spelling is kept
+    assert new[0]["type"] == "work"
+    assert "formattedType" not in new[0]  # Google recomputes the label
+    assert new[0]["metadata"] == p["emailAddresses"][0]["metadata"]
+    assert new[1] == p["emailAddresses"][1]
+    (change,) = plan.changes
+    assert change.field == "emails"
+    assert change.before[0]["type"] == "home"  # type: ignore[index,call-overload]
+    assert change.after[0]["type"] == "work"  # type: ignore[index,call-overload]
+
+
+def test_add_existing_email_with_the_same_type_in_another_case_is_a_noop() -> None:
+    ops = ContactOps(emails=ListOps(add=[Email(value="ada@example.com", type="HOME")]))
+    assert plan_update(ada(), ops).update_fields == []
+
+
+def test_add_existing_phone_by_digits_with_another_type_changes_its_type() -> None:
+    ops = ContactOps(phones=ListOps(add=[Phone(value="+393331234567", type="work")]))
+    plan = plan_update(ada(), ops)
+    new = plan.fields["phoneNumbers"]
+    assert [n["value"] for n in new] == ["+39 333 123 4567", "02 1234 5678"]
+    assert new[0]["type"] == "work"
+
+
+def test_retype_compares_with_the_label_when_the_item_has_no_type() -> None:
+    p = ada()
+    del p["emailAddresses"][0]["type"]
+    p["emailAddresses"][0]["formattedType"] = "Work"
+    same = ContactOps(emails=ListOps(add=[Email(value="ada@example.com", type="work")]))
+    assert plan_update(p, same).update_fields == []
+    other = ContactOps(emails=ListOps(add=[Email(value="ada@example.com", type="home")]))
+    new = plan_update(p, other).fields["emailAddresses"]
+    assert (new[0]["type"], "formattedType" in new[0]) == ("home", False)
+
+
+def test_add_existing_url_with_another_type_changes_its_type() -> None:
+    p = ada(urls=[item(value="https://example.com", type="blog")])
+    ops = ContactOps(urls=ListOps(add=[Url(value="https://EXAMPLE.com", type="homePage")]))
+    new = plan_update(p, ops).fields["urls"]
+    assert new == [{**p["urls"][0], "type": "homePage"}]
+
+
+def test_retyped_value_marked_primary_becomes_the_primary() -> None:
+    added = Email(value="countess@example.org", type="work", primary=True)
+    new = plan_update(ada(), ContactOps(emails=ListOps(add=[added]))).fields["emailAddresses"]
+    assert [e["value"] for e in new] == ["Countess@Example.org", "ada@example.com"]
+    assert new[0]["type"] == "work"
+    assert new[0]["metadata"]["sourcePrimary"] is True
+    assert new[1]["metadata"]["sourcePrimary"] is False
+
+
+def test_retype_changes_the_contacts_own_value_not_the_profiles() -> None:
+    p = ada()
+    profile = {"value": "ada@example.com", "type": "home", "metadata": {"source": PROFILE}}
+    p["emailAddresses"].append(profile)
+    ops = ContactOps(emails=ListOps(add=[Email(value="ada@example.com", type="work")]))
+    new = plan_update(p, ops).fields["emailAddresses"]
+    assert new[0]["type"] == "work"
+    assert new[2] == profile
+
+
 def test_replace_all_then_set_primary_on_the_new_list() -> None:
     ops = ContactOps(
         emails=ListOps(

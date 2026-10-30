@@ -137,14 +137,16 @@ Pure functions, no I/O; the tool does fetch → apply → send → retry.
 
 1. Fetch the person with `PERSON_FIELDS` (it carries the `etag`).
 2. For each field given, compute the new **raw** item list from the existing raw items. Existing
-   items are kept verbatim (their `metadata`, `formattedType`, unknown sub-fields); new ones are
-   built from the models.
+   items are kept verbatim (their `metadata`, `formattedType`, unknown sub-fields), except for the
+   type change below; new ones are built from the models.
    - `remove` matches by normalized value: e-mails case-insensitively, phone numbers by digits
      (of the value or its canonical form), other fields by their trimmed, case-insensitive key
      (see `ListOps`). Every `remove` value must match at least one item, else
      `InvalidArgumentError`.
-   - `add` of a nickname, e-mail, phone or URL the contact already has adds nothing; other
-     fields (organizations, addresses, relations, events, custom fields) are appended as given.
+   - `add` of a nickname, e-mail, phone or URL the contact already has changes nothing, unless
+     it comes with a different `type`: then the contact's item takes the new type, and the change
+     is reported. Other fields (organizations, addresses, relations, events, custom fields) are
+     appended as given.
    - `set_primary` must match exactly one item, which moves first and gets `metadata.primary` and
      `metadata.sourcePrimary` true (`sourcePrimary` is what Google honours on writes; `primary` is
      output-only); any other item flagged primary is unflagged.

@@ -5,7 +5,8 @@ person, call :func:`plan_update` (or :func:`build_person` for a new contact), se
 result, and retry on an etag conflict by planning again on the fresh person.
 
 Existing items are kept **verbatim** (their ``metadata``, ``formattedType`` and any
-sub-field this server does not know); only new items are built from the tool models.
+sub-field this server does not know), except that an ``add`` of a value already there with
+another type changes that item's type; only new items are built from the tool models.
 Values from the person's own Google profile are never edited: Google ignores them.
 """
 
@@ -303,7 +304,8 @@ class ListField:
     keys: Callable[[JSON], set[str]]  # normalized match keys of a raw item
     query: Callable[[str], str]  # normalizes a `remove` / `set_primary` value
     label: Callable[[JSON], str]  # how an item is shown in an error
-    dedupe_by_key: bool = False  # `add` doesn't duplicate a value the contact already has
+    # `add` doesn't duplicate a value the contact already has (it may retype it).
+    dedupe_by_key: bool = False
 
 
 def _value(item: JSON) -> Any:
@@ -477,6 +479,25 @@ def _build_list(spec: ListField, models: Sequence[Any], errors: list[str]) -> li
     return built
 
 
+def _retyped(existing: JSON, added: JSON) -> JSON:
+    """``existing`` with the type of ``added`` when ``added`` names a different one.
+
+    Types compare case-insensitively against ``type``, or Google's ``formattedType`` label
+    when the item has no ``type``. The returned copy drops ``formattedType``, which Google
+    recomputes from the new type. Without a type on ``added``, ``existing`` is returned.
+    """
+    wanted = added.get("type")  # already stripped, never empty (see _typed)
+    if not isinstance(wanted, str):
+        return existing
+    current = existing.get("type") or existing.get("formattedType")
+    if isinstance(current, str) and current.strip().casefold() == wanted.casefold():
+        return existing
+    retyped = copy.deepcopy(existing)
+    retyped["type"] = wanted
+    retyped.pop("formattedType", None)
+    return retyped
+
+
 def apply_list_ops(
     spec: ListField, items: list[JSON], ops: ListOps[Any], errors: list[str]
 ) -> list[JSON]:
@@ -507,7 +528,12 @@ def apply_list_ops(
                 keys = spec.keys(item)
                 dupe = next((i for i in new if is_contact_data(i) and keys & spec.keys(i)), None)
                 if dupe is not None:
-                    # Already there: adding it again would make a duplicate.
+                    # Already there: adding it again would make a duplicate. A different
+                    # type is a change to the existing value, not a second value.
+                    retyped = _retyped(dupe, item)
+                    if retyped is not dupe:
+                        new = [retyped if i is dupe else i for i in new]
+                        dupe = retyped
                     if _model_primary(model):
                         primaries.append(dupe)
                     continue
