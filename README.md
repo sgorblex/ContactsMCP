@@ -43,8 +43,8 @@ once; results are tagged with their alias.
 | `batch_update_contacts` | destructive | Update up to 200 contacts with the same rules as `update_contact`; any Google refuses are listed in `failures`. |
 | `create_group` | write | Create a label. |
 | `rename_group` | write | Rename a user label (idempotent). |
-| `add_to_group` | write | Add contacts to a label (idempotent). |
-| `remove_from_group` | destructive | Remove contacts from a label (the contacts stay); reports those Google did not find or could not remove. |
+| `add_to_group` | write | Add contacts to a label (idempotent); reports those already in it. |
+| `remove_from_group` | destructive | Remove contacts from a label (the contacts stay); reports those that were not in it, and those Google did not find or could not remove. |
 | `delete_contact` | destructive | Delete a contact; returns what was deleted. |
 | `delete_group` | destructive | Delete a user label. Its contacts stay unless `delete_contacts` is true. |
 
