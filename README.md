@@ -33,6 +33,8 @@ and the Python minor version, and defines the tasks; plain `uv` works the same.
 CI (GitHub Actions, [`check.yml`](.github/workflows/check.yml)) runs the same tasks as one
 check per job on every pull request, stacked ones included, and on pushes to `main`.
 
+The People API is mocked at the HTTP layer in the tests, so they need no network and no account.
+
 [`docs/DESIGN.md`](docs/DESIGN.md) describes the module layout and how the pieces fit.
 
 ## License
