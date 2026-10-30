@@ -1,0 +1,26 @@
+[tools]
+python = "3.14"
+uv = "0.13.6"
+
+[env]
+_.python.venv = { path = ".venv", create = false }
+
+[tasks.setup]
+description = "Install the project and dev dependencies into .venv"
+run = "uv sync --locked"
+
+[tasks.check]
+description = "Lint, format check and type check"
+run = [
+  "uv run ruff check .",
+  "uv run ruff format --check .",
+  "uv run mypy",
+]
+
+[tasks.fix]
+description = "Apply lint fixes and formatting"
+run = ["uv run ruff check --fix .", "uv run ruff format ."]
+
+[tasks.test]
+description = "Run the unit tests"
+run = "uv run pytest"

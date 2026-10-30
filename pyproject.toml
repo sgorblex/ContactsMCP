@@ -1,0 +1,63 @@
+[project]
+name = "contacts-mcp"
+version = "0.0.0"
+description = "Self-hostable MCP server for Google Contacts (People API), with multiple accounts"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.14"
+authors = [{ name = "Alessandro Clerici Lorenzini" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "fastmcp>=4.1.4,<5",
+    "httpx>=0.28.1",
+    "pydantic>=2.12",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.18",
+    "pytest>=8.4",
+    "pytest-asyncio>=1.2",
+    "respx>=0.22",
+    "ruff>=0.14",
+]
+
+[build-system]
+requires = ["uv_build>=0.9,<0.14"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W", "I", "B", "UP", "ANN", "RUF", "SIM", "PT", "DTZ", "LOG",
+    "S", "C4", "RET", "PIE", "TRY", "ASYNC", "N",
+]
+ignore = [
+    "TRY003", # long messages in exception constructors are how tool errors reach the user
+    "S101",   # assert is fine in tests (and narrowing)
+    "ANN401", # Any is how People API JSON is typed
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "S105", "S106", "PT011"]
+
+[tool.mypy]
+strict = true
+python_version = "3.14"
+files = ["src", "tests"]
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra --strict-markers"
+filterwarnings = ["error::pytest.PytestUnraisableExceptionWarning"]
