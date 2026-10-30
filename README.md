@@ -5,11 +5,33 @@ API), with several Google accounts side by side. Connect it to claude.ai (custom
 Claude Code or any other MCP client, and let the assistant search, read, create and edit your
 contacts.
 
-Contents: [1. Google Cloud setup](#1-google-cloud-setup) ·
-[2. Linking accounts](#2-linking-accounts) · [Configuration](#configuration) ·
+Contents: [1. What it does](#1-what-it-does) · [2. Google Cloud setup](#2-google-cloud-setup) ·
+[3. Linking accounts](#3-linking-accounts) · [Configuration](#configuration) ·
 [Development](#development) · [License](#license)
 
-## 1. Google Cloud setup
+## 1. What it does
+
+Every tool except `accounts` takes an `account` (the alias you chose when linking). It may be omitted only when
+exactly one account is linked. `search_contacts` also accepts `"*"` to search every account at
+once; results are tagged with their alias.
+
+| Tool | Kind | What it does |
+| --- | --- | --- |
+| `accounts` | read | Linked accounts: alias, e-mail, read-only flag, status (ok, needs re-link, unreadable). Call it first. |
+| `search_contacts` | read | Search contacts by name, e-mail, phone or organization (`people:searchContacts`). Compact results. |
+| `list_contacts` | read | Page through all contacts, with sorting. |
+| `get_contact` | read | One contact in full, with its `etag`. |
+| `list_other_contacts` | read | The "Other contacts" Google collects automatically (people you e-mailed). |
+| `search_other_contacts` | read | Search "Other contacts". |
+
+Every tool carries MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
+`openWorldHint`) and refuses arguments it does not know, naming them.
+
+Things worth knowing: Google's search index lags behind writes (a contact you just created may
+not be found for a while; `get_contact` is immediate), and contact text, "Other contacts" above
+all, is third-party data: the server tells the model to treat it as data, never as instructions.
+
+## 2. Google Cloud setup
 
 One Google Cloud OAuth client is shared by all the accounts you link.
 
@@ -49,7 +71,7 @@ by client ID). If every account you want to link belongs to one Workspace organi
 instead choose the **Internal** audience on the consent screen: no publishing, no warning, and
 no 7-day token expiry, but only that organization's accounts can sign in.
 
-## 2. Linking accounts
+## 3. Linking accounts
 
 Accounts are linked with the `contacts-mcp auth …` command. It works headless, with no tunnel. The alias is yours to pick: lowercase letters, digits and `-`,
 up to 32 characters (`personal`, `work`).
@@ -102,6 +124,10 @@ contacts-mcp auth list                          # aliases, e-mails, read-only, s
 contacts-mcp auth set-read-only personal on     # or off
 contacts-mcp auth remove personal               # also revokes the token at Google, best effort
 ```
+
+If Google revokes a refresh token (you removed the app's access in your Google account, or the
+token went unused for too long), the tools say so and name the command to run: `auth add <alias>`
+again for that alias.
 
 ## Configuration
 

@@ -1,4 +1,4 @@
-"""Shared fixtures: a mocked Google (respx), fake accounts and a person builder.
+"""Shared fixtures: a mocked Google (respx), fake accounts and an in-memory MCP client.
 
 The People API is mocked at the HTTP layer: tests register routes on ``google``
 (a ``respx.MockRouter``) against ``PEOPLE`` (the API base URL). The token endpoint is
@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 import pytest
 import respx
+from fastmcp import Client, FastMCP
 from pydantic import SecretStr
 
 from contacts_mcp.accounts import AccountFileError, AccountRecord
@@ -105,6 +106,20 @@ def make_registry(
         )
         registry.reload()
         return registry
+
+    return factory
+
+
+@pytest.fixture
+def make_client() -> Callable[[AccountRegistry], Client[Any]]:
+    """An in-memory MCP client over a bare server with every tool registered."""
+
+    def factory(registry: AccountRegistry) -> Client[Any]:
+        from contacts_mcp.tools import register_all
+
+        mcp = FastMCP("test")
+        register_all(mcp, registry)
+        return Client(mcp)
 
     return factory
 
