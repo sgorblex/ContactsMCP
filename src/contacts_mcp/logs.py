@@ -102,12 +102,14 @@ def audit(
     outcome: AuditOutcome,
     detail: str | None = None,
     contacts: Iterable[str] = (),
+    user: str | None = None,
 ) -> None:
     """One ``"kind":"audit"`` line per write attempt, refused ones included.
 
     ``fields`` are field *names* (``emailAddresses``), never values. ``detail``
     is a short reason for a refusal or an error, never an API body. ``contacts`` are
     the resource names of the contacts a batch or group-membership write touches.
+    ``user`` overrides the signed-in MCP user (the settings page has its own sign-in).
     """
     scope = _audit_scope.get()
     if scope is not None:
@@ -117,7 +119,7 @@ def audit(
         outcome,
         extra={
             "kind": "audit",
-            "user": current_user(),
+            "user": user or current_user(),
             "tool": tool,
             "account": account,
             "resource_name": resource_name,

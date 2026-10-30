@@ -10,11 +10,21 @@ defends, and against whom:
   own allowlist (`CONTACTS_MCP_ALLOWED_USERS`: verified e-mail addresses and/or `sub` values),
   checked on every request, because a public provider such as Google would otherwise let anyone
   with an account sign in. HTTP mode refuses to start without the OIDC settings and the
-  allowlist. Apart from the OAuth flow itself, `/healthz` is the only unauthenticated endpoint,
-  and it answers with counts only.
+  allowlist. Apart from the OAuth flows (the MCP one and the settings page's sign-in),
+  `/healthz` is the only unauthenticated endpoint, and it answers with counts only.
   Redirect URIs for MCP clients are limited to the configured list (claude.ai, claude.com and
   loopback by default), and the accepted `Host` is limited to the configured public host name and loopback names.
   TLS is the reverse proxy's job.
+- **The settings page.** Off unless `CONTACTS_MCP_SETTINGS_PAGE` is set, and HTTP only. It signs
+  you in at the same OIDC provider (authorization code with PKCE; the `state` also lives in a
+  cookie, so the sign-in must finish in the browser that started it) and applies the same
+  allowlist. Sessions are random tokens in a `__Host-` cookie (`Secure`, `HttpOnly`,
+  `SameSite=Lax`), kept server-side only as their hash, ending after 30 idle minutes or 12
+  hours. Every POST must carry the session's CSRF token and come from the server's own origin
+  (`Origin`, else `Sec-Fetch-Site: same-origin`). Removing an account needs a sign-in from the
+  last 10 minutes, otherwise a new login at the provider, checked by the ID token's
+  `auth_time`. Pages have no scripts and a strict Content Security Policy. Each change is
+  audited. MCP tools cannot change account settings.
 - **Secrets at rest.** Google refresh tokens are stored in the data directory
   (`accounts/<alias>.json`, files 0600, directory 0700, written atomically), unencrypted:
   protect the volume and its backups like a password store. Access tokens are kept in memory

@@ -109,7 +109,8 @@ What any OIDC provider needs:
 
 - A **confidential client** (it has a client secret) for this server.
 - The redirect URI **`<base_url>/auth/callback`**, for example
-  `https://contacts.example.com/auth/callback`, matching `CONTACTS_MCP_BASE_URL` exactly.
+  `https://contacts.example.com/auth/callback`, matching `CONTACTS_MCP_BASE_URL` exactly. With
+  the [settings page](#settings-page), also **`<base_url>/settings/auth/callback`**.
 - The scopes **`openid email offline_access`** (the server requests these regardless of what the
   MCP client asks for), with **refresh tokens enabled** for the client. Some providers need
   `offline_access` switched on explicitly.
@@ -249,6 +250,24 @@ cannot be read never crashes the server; it is reported by the `accounts` tool.
 If Google revokes a refresh token (you removed the app's access in your Google account, or the
 token went unused for too long), the tools say so and name the command to run: `auth add <alias>`
 again for that alias.
+
+### Settings page
+
+Over HTTP, the server can also show the linked accounts on a web page, at
+`<base_url>/settings`. It is off by default. To turn it on:
+
+1. Add the redirect URI `<base_url>/settings/auth/callback` to the identity provider's client
+   (section 3), next to `<base_url>/auth/callback`.
+2. Set `CONTACTS_MCP_SETTINGS_PAGE=true` and restart the server.
+
+You sign in at the same identity provider as MCP clients, and only users in
+`CONTACTS_MCP_ALLOWED_USERS` get in. The page lists each account with its e-mail, status
+(OK, needs re-link, unreadable), access and link date. You can make an account read-only or
+writable again, and remove it, which also revokes its grant at Google. Removing needs a sign-in
+from the last 10 minutes: otherwise the page sends you to the provider to sign in again first.
+Changes apply to the running server at once, with no `SIGHUP`, and each one leaves an audit line.
+
+The session lasts 30 minutes without use, 12 hours at most, and ends when the server restarts.
 
 ## 5. Running it
 
@@ -392,6 +411,7 @@ secrets), not both. [`.env.example`](.env.example) is the commented template.
 | `CONTACTS_MCP_OIDC_VERIFY_ID_TOKEN` | `false` | verify the ID token instead of the access token (Google) |
 | `CONTACTS_MCP_TRUST_FORWARDED_HEADERS` | `false` | trust `X-Forwarded-For` / `-Proto` |
 | `CONTACTS_MCP_FORWARDED_ALLOW_IPS` | `127.0.0.1` | proxies trusted for them |
+| `CONTACTS_MCP_SETTINGS_PAGE` | `false` | serve the [settings page](#settings-page) (HTTP only) |
 | `FASTMCP_HOME` | `~/.local/share/fastmcp` (`/oauth` in the image) | OAuth state |
 
 ## Tool exposure

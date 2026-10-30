@@ -33,6 +33,9 @@ configuration are in the [README](../README.md).
 | `exposure.py` | `CONTACTS_MCP_EXPOSED_TOOLS` parsing and pruning |
 | `server.py` | `build_server(settings, registry)`: instructions, tools, exposure, audit middleware, `/healthz`, `SIGHUP`, HTTP options; `main()` |
 | `oidc.py` | `AllowlistOIDCProxy(OIDCProxy)`: upstream identity claims and the user allowlist |
+| `web/session.py` | The settings page's sign-in: OIDC in the browser, sessions, step-up |
+| `web/settings.py` | The `/settings` routes: account list, read-only, remove; forgery checks |
+| `web/page.py` | HTML layout and the headers every page is sent with |
 
 Every tool module exposes `register(mcp: FastMCP, registry: AccountRegistry) -> None`;
 `tools.register_all` calls them all. Tools are `async`, close over the registry, and return
@@ -184,6 +187,9 @@ its error class.
 A write-tool call refused before its body runs (an unknown or invalid argument) is audited by a
 fastmcp middleware, so refused attempts are logged too without double lines.
 
+The settings page audits its own changes the same way, with `tool` set to `settings.<action>`
+and `user` set to the page's signed-in user.
+
 ## Server
 
 - `build_server()` registers the tools, applies `CONTACTS_MCP_EXPOSED_TOOLS` (tools that are not
@@ -218,6 +224,30 @@ fastmcp middleware, so refused attempts are logged too without double lines.
 - `/healthz` is outside the OAuth layer: process up and account files readable, without calling
   Google; `?deep=1` also refreshes each account's token, rate-limited, since anyone can call it.
   It answers with counts only.
+
+## Settings page
+
+`/settings`, with `CONTACTS_MCP_SETTINGS_PAGE` in HTTP mode, manages the account files from a
+browser. Its routes are fastmcp custom routes, so they sit outside the MCP bearer check and do
+their own:
+
+- **Sign-in.** Authorization code with PKCE at the configured OIDC provider, with the same
+  client and its own redirect URI (`/settings/auth/callback`). The `state` is also set in a
+  short-lived `__Host-contacts_signin` cookie, so a callback from another browser is refused.
+  The token response goes through `AllowlistOIDCProxy._extract_upstream_claims` (issuer and
+  audience checks, userinfo fallback) and `is_allowed`, as for MCP clients.
+- **Sessions.** A random token in `__Host-contacts_session`, stored in memory as its SHA-256,
+  30 minutes idle and 12 hours at most; a restart signs everyone out. `SameSite=Lax`, not
+  `Strict`: the redirect back from the provider is a cross-site navigation and must carry it.
+- **Forgery.** POSTs need `Origin` equal to the base URL (or, without `Origin`,
+  `Sec-Fetch-Site: same-origin`) and the session's CSRF token; fastmcp's Host/Origin guard
+  covers the whole app as well.
+- **Step-up.** Removing an account needs a sign-in within 10 minutes. Otherwise the browser
+  goes back to the provider with `max_age=60` (not `prompt=login`, which Google refuses, nor
+  `max_age=0`, which some providers ignore); an `auth_time` more than 60 s older than that
+  request, or none, is refused.
+- **Changes.** Through `AccountFileStore`, then `registry.reload()`, then an audit line with
+  `tool` set to `settings.<action>` and the page's user.
 
 ## Configuration
 

@@ -31,6 +31,7 @@ from contacts_mcp.logs import AuditOutcome, audit, audit_scope, configure_loggin
 from contacts_mcp.oidc import MCP_PATH, build_auth
 from contacts_mcp.registry import AccountRegistry
 from contacts_mcp.tools import register_all
+from contacts_mcp.web.settings import register_settings_page
 
 log = logging.getLogger(__name__)
 
@@ -294,6 +295,9 @@ def build_server(
     @mcp.custom_route("/healthz", methods=["GET"])
     async def healthz(request: Request) -> PlainTextResponse:
         return await health(request)
+
+    if auth is not None and settings.http is not None and settings.http.settings_page:
+        register_settings_page(mcp, settings.http, registry, auth)
 
     log.info(
         "server ready",
