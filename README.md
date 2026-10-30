@@ -7,7 +7,7 @@ contacts.
 
 Contents: [1. What it does](#1-what-it-does) · [2. Google Cloud setup](#2-google-cloud-setup) ·
 [3. Linking accounts](#3-linking-accounts) · [Configuration](#configuration) ·
-[Development](#development) · [License](#license)
+[Read-only accounts](#read-only-accounts) · [Development](#development) · [License](#license)
 
 ## 1. What it does
 
@@ -21,11 +21,26 @@ once; results are tagged with their alias.
 | `search_contacts` | read | Search contacts by name, e-mail, phone or organization (`people:searchContacts`). Compact results. |
 | `list_contacts` | read | Page through all contacts, with sorting. |
 | `get_contact` | read | One contact in full, with its `etag`. |
+| `list_groups` | read | Contact groups (labels), user and system, with member counts. |
 | `list_other_contacts` | read | The "Other contacts" Google collects automatically (people you e-mailed). |
 | `search_other_contacts` | read | Search "Other contacts". |
+| `create_contact` | write | Create a contact: names, nicknames, e-mails, phones, organizations, addresses, birthday, notes, URLs, relations, events, custom fields, labels. |
+| `update_contact` | destructive | Edit a contact. Only what you ask changes: existing values are removed only by an explicit `remove`, `replace_all` or `clear`, or replaced by a new `birthday` or `biography` (which is why it is marked destructive). Multi-valued fields take explicit `add`, `remove`, `replace_all` and `set_primary`; the result lists before and after for each touched field. |
+| `copy_other_contact_to_contacts` | write | Promote an "Other contact" to a real contact. |
+| `batch_create_contacts` | write | Create up to 200 contacts in one call; any Google refuses are listed in `failures`. |
+| `batch_update_contacts` | destructive | Update up to 200 contacts with the same rules as `update_contact`; any Google refuses are listed in `failures`. |
+| `create_group` | write | Create a label. |
+| `rename_group` | write | Rename a user label (idempotent). |
+| `add_to_group` | write | Add contacts to a label (idempotent). |
+| `remove_from_group` | destructive | Remove contacts from a label (the contacts stay); reports those Google did not find or could not remove. |
+| `delete_contact` | destructive | Delete a contact; returns what was deleted. |
+| `delete_group` | destructive | Delete a user label. Its contacts stay unless `delete_contacts` is true. |
+
+Labels can be given by resource name (`contactGroups/…`) or exact name.
 
 Every tool carries MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
-`openWorldHint`) and refuses arguments it does not know, naming them.
+`openWorldHint`) and refuses arguments it does not know, naming them. Write tools also refuse on
+[read-only accounts](#read-only-accounts).
 
 Things worth knowing: Google's search index lags behind writes (a contact you just created may
 not be found for a while; `get_contact` is immediate), and contact text, "Other contacts" above
@@ -142,6 +157,17 @@ secrets), not both.
 | `CONTACTS_MCP_DATA_DIR` | `$XDG_DATA_HOME/contacts-mcp` (`~/.local/share/…`) | account files |
 | `CONTACTS_MCP_LOG_LEVEL` | `INFO` | JSON lines on stderr |
 
+## Read-only accounts
+
+An account can be marked read-only, independently of which tools are offered:
+
+```sh
+contacts-mcp auth set-read-only work on
+```
+
+Write tools then refuse on that account (and the refusal is audit-logged), while reads keep
+working.
+
 ## Development
 
 Tools: [uv](https://docs.astral.sh/uv/) and Python 3.14. [mise](https://mise.jdx.dev/) pins uv
@@ -158,6 +184,13 @@ CI (GitHub Actions, [`check.yml`](.github/workflows/check.yml)) runs the same ta
 check per job on every pull request, stacked ones included, and on pushes to `main`.
 
 The People API is mocked at the HTTP layer in the tests, so they need no network and no account.
+
+[`scripts/smoke_test.py`](scripts/smoke_test.py) is an opt-in end-to-end run against a **real**
+account: it creates a throwaway contact and label and deletes them again. It never runs in CI:
+
+```sh
+CONTACTS_MCP_SMOKE=1 mise exec -- uv run python scripts/smoke_test.py personal
+```
 
 [`docs/DESIGN.md`](docs/DESIGN.md) describes the module layout and how the pieces fit.
 

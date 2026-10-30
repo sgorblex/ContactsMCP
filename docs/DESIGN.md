@@ -23,9 +23,12 @@ configuration are in the [README](../README.md).
 | `accounts.py` | `AccountFileStore`: one JSON file per alias, written atomically, 0600 in a 0700 directory |
 | `registry.py` | `AccountRegistry` / `Account`: routing by alias, per-account mutation lock, search warm-up, group-name cache, `reload()` |
 | `auth_cli.py` | `auth add / list / remove / set-read-only` |
-| `tools/_common.py` | Tool annotations and shared description notes |
+| `tools/_common.py` | Tool annotations, shared description notes, `write_attempt()` (account check, lock, audit) |
 | `tools/read.py` | `accounts`, `search_contacts`, `list_contacts`, `get_contact` |
 | `tools/other.py` | `list_other_contacts`, `search_other_contacts` |
+| `tools/write.py` | `create_contact`, `update_contact`, `delete_contact`, `copy_other_contact_to_contacts`, `batch_create_contacts`, `batch_update_contacts` |
+| `tools/groups.py` | `list_groups`, `create_group`, `rename_group`, `delete_group`, `add_to_group`, `remove_from_group` |
+| `update_engine.py` | Pure functions: tool inputs → person JSON for create; operations applied to an existing person for update |
 
 Every tool module exposes `register(mcp: FastMCP, registry: AccountRegistry) -> None`;
 `tools.register_all` calls them all. Tools are `async`, close over the registry, and return
@@ -94,8 +97,81 @@ third-party data, and the tool descriptions say so.
 | `search_contacts(query, account, limit=10)` | read | `people:searchContacts`, warm-up once per account; limit ≤ 30 |
 | `list_contacts(account, page_size=50, page_token, sort)` | read | `connections.list` with real pagination |
 | `get_contact(resource_name, account, raw=false)` | read | full `Contact` with etag |
+| `list_groups(account)` | read | user and system groups with member counts |
 | `list_other_contacts(account, page_size, page_token)` | read | |
 | `search_other_contacts(query, account, limit)` | read | its own warm-up |
+| `create_contact(account, name, nicknames, emails, phones, …, groups)` | write | returns `Contact` |
+| `update_contact(resource_name, account, …)` | destructive | the update engine below; returns `UpdateResult` |
+| `delete_contact(resource_name, account)` | destructive | returns the deleted contact's summary |
+| `copy_other_contact_to_contacts(resource_name, account)` | write | returns `Contact` |
+| `batch_create_contacts(contacts, account)` | write | ≤ 200 |
+| `batch_update_contacts(updates, account)` | destructive | ≤ 200, the same engine per contact |
+| `create_group(name, account)` | write | |
+| `rename_group(group, new_name, account)` | write, idempotent | user groups only |
+| `delete_group(group, account, delete_contacts=false)` | destructive | user groups only; with `delete_contacts`, the audit line names every contact deleted |
+| `add_to_group(group, resource_names, account)` | write, idempotent | `members:modify` |
+| `remove_from_group(group, resource_names, account)` | destructive, idempotent | reports `could_not_remove` |
+
+`destructiveHint` is true wherever values can be removed, not only for deletes: the MCP spec
+reserves `false` for additive changes.
+
+Groups are referred to by resource name (`contactGroups/…`) or exact name (case-insensitive;
+system groups also as `myContacts` / `starred`); an ambiguous name is an error listing the
+matches. System groups cannot be renamed or deleted, and only `myContacts` and `starred` accept
+member changes.
+
+Write-tool parameters are top-level arguments rather than one nested object, so clients render
+them well: `name: NameFields`, `nicknames`, `emails: ListOps[Email]`, `phones: ListOps[Phone]`,
+`organizations`, `addresses`, `urls`, `relations`, `events`, `user_defined` (all `ListOps`),
+`birthday: PartialDate`, `biography: str`, `clear: list["name" | "birthday" | "biography"]`.
+`create_contact` takes plain lists instead of `ListOps`.
+
+## Update engine (`update_engine.py`)
+
+Pure functions, no I/O; the tool does fetch → apply → send → retry.
+
+1. Fetch the person with `PERSON_FIELDS` (it carries the `etag`).
+2. For each field given, compute the new **raw** item list from the existing raw items. Existing
+   items are kept verbatim (their `metadata`, `formattedType`, unknown sub-fields); new ones are
+   built from the models.
+   - `remove` matches by normalized value: e-mails case-insensitively, phone numbers by digits
+     (of the value or its canonical form), other fields by their trimmed, case-insensitive key
+     (see `ListOps`). Every `remove` value must match at least one item, else
+     `InvalidArgumentError`.
+   - `add` of a nickname, e-mail, phone or URL the contact already has adds nothing; other
+     fields (organizations, addresses, relations, events, custom fields) are appended as given.
+   - `set_primary` must match exactly one item, which moves first and gets `metadata.primary` and
+     `metadata.sourcePrimary` true (`sourcePrimary` is what Google honours on writes; `primary` is
+     output-only); any other item flagged primary is unflagged.
+   - Values from the person's own Google profile (`metadata.source.type` other than `CONTACT`)
+     are shown with the contact but ignored by Google on update, so `remove` and `set_primary`
+     match only the contact's own values, and refuse a value only the profile has.
+   - `replace_all` replaces the list; `set_primary` then applies to the new list.
+   - Single-valued fields: `name` merges the given parts into the existing name and drops the
+     computed display fields so Google recomputes them; `birthday` and `biography` replace;
+     `clear` empties them.
+
+   Every problem in every field is collected and raised together, before anything is written.
+3. `updatePersonFields` lists only the fields whose result differs from the current value. If
+   none does, no request is sent and the result says nothing changed.
+4. Send `updateContact` with the etag. On `EtagConflictError`, re-fetch, re-apply the **same
+   operations** to the fresh person and retry once; a second conflict is a clear error.
+5. `UpdateResult.changes` lists, per touched field, the normalized values before and after.
+
+`batch_update_contacts` validates every item first, fetches all contacts with `batchGet`, plans
+each one with the same engine, and sends one request whose mask is the union of the changed
+fields; a contact that does not change a masked field sends its current value for it. Google
+answers per contact, so a contact it refuses is reported in `failures` while the others are
+updated; `batch_create_contacts` does the same.
+
+## Audit log
+
+Every write tool runs inside `write_attempt()`, which resolves the account for writing, holds its
+mutation lock and writes exactly one `"kind":"audit"` line per attempt: `ok`, `refused` (account
+or argument problems) or `error`. The line names the signed-in user, tool, account, resource
+name, the contacts a batch or membership change touched, and the People API field *names*
+involved, never their values; Google's error text, which can echo submitted values, is reduced to
+its error class.
 
 ## Configuration
 
