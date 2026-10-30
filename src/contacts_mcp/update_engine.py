@@ -73,11 +73,6 @@ _DERIVED_NAME_KEYS = ("displayName", "displayNameLastFirst", "unstructuredName")
 
 # --- tool input models (shared by the single and batch tools) --------------------------
 
-_LIST_DESC = (
-    "Operations on the existing values: add, remove (by value), replace_all, set_primary. "
-    "Existing values not named are kept."
-)
-
 
 class ContactFields(Model):
     """A new contact's fields (create_contact, batch_create_contacts)."""
@@ -106,15 +101,15 @@ class ContactOps(Model):
     name: NameFields | None = Field(
         default=None, description="Only the parts given change; '' clears a part."
     )
-    nicknames: ListOps[str] | None = Field(default=None, description=_LIST_DESC)
-    emails: ListOps[Email] | None = Field(default=None, description=_LIST_DESC)
-    phones: ListOps[Phone] | None = Field(default=None, description=_LIST_DESC)
-    organizations: ListOps[Organization] | None = Field(default=None, description=_LIST_DESC)
-    addresses: ListOps[Address] | None = Field(default=None, description=_LIST_DESC)
-    urls: ListOps[Url] | None = Field(default=None, description=_LIST_DESC)
-    relations: ListOps[Relation] | None = Field(default=None, description=_LIST_DESC)
-    events: ListOps[Event] | None = Field(default=None, description=_LIST_DESC)
-    user_defined: ListOps[UserDefined] | None = Field(default=None, description=_LIST_DESC)
+    nicknames: ListOps[str] | None = None
+    emails: ListOps[Email] | None = None
+    phones: ListOps[Phone] | None = None
+    organizations: ListOps[Organization] | None = None
+    addresses: ListOps[Address] | None = None
+    urls: ListOps[Url] | None = None
+    relations: ListOps[Relation] | None = None
+    events: ListOps[Event] | None = None
+    user_defined: ListOps[UserDefined] | None = None
     birthday: PartialDate | None = Field(default=None, description="Replaces the birthday.")
     biography: str | None = Field(default=None, description="Replaces the notes ('' clears).")
     clear: list[ClearableField] = Field(

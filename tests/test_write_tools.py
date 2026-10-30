@@ -368,6 +368,28 @@ async def test_delete_contact_returns_summary(
     }
 
 
+def _descriptions(schema: Any) -> list[str]:
+    if isinstance(schema, dict):
+        own = [schema["description"]] if isinstance(schema.get("description"), str) else []
+        return own + [d for v in schema.values() for d in _descriptions(v)]
+    if isinstance(schema, list):
+        return [d for v in schema for d in _descriptions(v)]
+    return []
+
+
+async def test_list_operations_stay_compact_in_the_schemas(client: Client[Any]) -> None:
+    # Repeated per field and per tool, these descriptions cost context on every request:
+    # OPS_NOTE says once what the operations do. No $ref either: some clients can't follow it.
+    async with client:
+        tools = {t.name: t for t in await client.list_tools()}
+    for name in ("update_contact", "batch_update_contacts"):
+        schema = tools[name].input_schema
+        assert "$ref" not in json.dumps(schema), name
+    emails = tools["update_contact"].input_schema["properties"]["emails"]
+    # Only the type hint of the e-mail model (in add and in replace_all).
+    assert set(_descriptions(emails)) == {"e.g. home, work, other, or any label"}
+
+
 async def test_delete_contact_is_destructive(client: Client[Any]) -> None:
     async with client:
         tools = {t.name: t for t in await client.list_tools()}

@@ -78,13 +78,16 @@ MY_CONTACTS = "contactGroups/myContacts"
 
 OPS_NOTE = (
     "Multi-valued fields take operations {add, remove, replace_all, set_primary}; values "
-    "not named are kept. remove and set_primary match by value: e-mails "
-    "case-insensitively, phones by digits only, addresses by their formatted text, "
-    "organizations by name, relations by person, custom fields by key, events by date "
-    "(YYYY-MM-DD or --MM-DD), nicknames and URLs by trimmed case-insensitive text. A remove "
-    "that matches nothing is an error and nothing is written. add of an e-mail, phone or URL "
-    "already there with another type changes its type. name changes only the parts "
-    "given; birthday and biography replace; clear empties name, birthday or biography."
+    "not named are kept. replace_all replaces them all ([] clears) and goes without add or "
+    "remove; set_primary (or primary: true on an added value) picks the primary one. "
+    "remove and set_primary match by value: e-mails case-insensitively, phones by digits "
+    "only, addresses by their formatted text, organizations by name (or title), relations "
+    "by person, custom fields by key, events by date (YYYY-MM-DD or --MM-DD), nicknames and "
+    "URLs by trimmed case-insensitive text. A remove that matches nothing is an error and "
+    "nothing is written. add of an e-mail, phone or URL already there with another type "
+    "changes its type. Dates need a year or a month, and a day needs a month. name changes "
+    "only the parts given; birthday and biography replace; clear empties name, birthday or "
+    "biography."
 )
 
 
@@ -263,10 +266,6 @@ async def update_many(attempt: WriteAttempt, updates: Sequence[ContactUpdate]) -
 # --- tool argument types ---------------------------------------------------------------
 
 
-def _ops(kind: str) -> str:
-    return f"Operations on the {kind}: add, remove (by value), replace_all, set_primary."
-
-
 NameArg = Annotated[
     NameFields | None,
     Field(description="Name parts. On update only the parts given change; '' clears a part."),
@@ -354,36 +353,15 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
         resource_name: PersonResourceName,
         account: AccountArg = None,
         name: NameArg = None,
-        nicknames: Annotated[ListOps[str] | None, Field(description=_ops("nicknames"))] = None,
-        emails: Annotated[
-            ListOps[Email] | None,
-            Field(description=_ops("e-mails") + " remove matches case-insensitively."),
-        ] = None,
-        phones: Annotated[
-            ListOps[Phone] | None,
-            Field(description=_ops("phone numbers") + " remove matches by digits only."),
-        ] = None,
-        organizations: Annotated[
-            ListOps[Organization] | None,
-            Field(description=_ops("organizations") + " remove matches the name."),
-        ] = None,
-        addresses: Annotated[
-            ListOps[Address] | None,
-            Field(description=_ops("addresses") + " remove matches the formatted address."),
-        ] = None,
-        urls: Annotated[ListOps[Url] | None, Field(description=_ops("URLs"))] = None,
-        relations: Annotated[
-            ListOps[Relation] | None,
-            Field(description=_ops("relations") + " remove matches the person."),
-        ] = None,
-        events: Annotated[
-            ListOps[Event] | None,
-            Field(description=_ops("events") + " remove matches YYYY-MM-DD or --MM-DD."),
-        ] = None,
-        user_defined: Annotated[
-            ListOps[UserDefined] | None,
-            Field(description=_ops("custom fields") + " remove matches the key."),
-        ] = None,
+        nicknames: ListOps[str] | None = None,
+        emails: ListOps[Email] | None = None,
+        phones: ListOps[Phone] | None = None,
+        organizations: ListOps[Organization] | None = None,
+        addresses: ListOps[Address] | None = None,
+        urls: ListOps[Url] | None = None,
+        relations: ListOps[Relation] | None = None,
+        events: ListOps[Event] | None = None,
+        user_defined: ListOps[UserDefined] | None = None,
         birthday: BirthdayArg = None,
         biography: BiographyArg = None,
         clear: Annotated[

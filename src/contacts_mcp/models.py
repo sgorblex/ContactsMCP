@@ -58,21 +58,19 @@ OtherContactResourceName = Annotated[
 
 AccountArg = Annotated[
     str | None,
-    Field(
-        description=(
-            "Account alias (see the `accounts` tool). May be omitted only when exactly one "
-            "account is configured."
-        )
-    ),
+    Field(description="Account alias from the `accounts` tool; omit only if just one is linked."),
 ]
 
 
 # --- contact fields (read and write) --------------------------------------------------
 
 
-class PartialDate(Model):
-    """A date whose year (or day) may be unknown, e.g. a birthday without a year."""
+# Docstrings of models used as tool arguments end up as schema descriptions, repeated
+# wherever the model is used (fastmcp inlines every reference), so they are comments here.
 
+
+# A date whose year (or day) may be unknown, e.g. a birthday without a year.
+class PartialDate(Model):
     year: int | None = Field(default=None, ge=1, le=9999)
     month: int | None = Field(default=None, ge=1, le=12)
     day: int | None = Field(default=None, ge=1, le=31)
@@ -86,9 +84,8 @@ class PartialDate(Model):
         return self
 
 
+# The parts of a person's name. On update, only the parts given are replaced.
 class NameFields(Model):
-    """The parts of a person's name. On update, only the parts given are replaced."""
-
     given: str | None = None
     family: str | None = None
     middle: str | None = None
@@ -100,28 +97,25 @@ class Name(NameFields):
     display: str | None = Field(default=None, description="Display name (read only).")
 
 
-_TYPE_DESC = "Type label: 'home', 'work', 'other', or any custom label."
-_PRIMARY_DESC = "Whether this is the primary value of its kind."
+_TYPE_DESC = "e.g. home, work, other, or any label"
 
 
 class Email(Model):
     value: str = Field(min_length=3)
     type: str | None = Field(default=None, description=_TYPE_DESC)
-    primary: bool = Field(default=False, description=_PRIMARY_DESC)
+    primary: bool = False
 
 
 class Phone(Model):
     value: str = Field(min_length=1)
-    type: str | None = Field(
-        default=None, description="'mobile', 'home', 'work', 'main', 'other', or custom."
-    )
-    primary: bool = Field(default=False, description=_PRIMARY_DESC)
+    type: str | None = Field(default=None, description="e.g. mobile, home, work, main")
+    primary: bool = False
     canonical: str | None = Field(default=None, description="E.164 form (read only).")
 
 
 class Address(Model):
     formatted: str | None = Field(
-        default=None, description="The full address as one string (read; or write it alone)."
+        default=None, description="The whole address as one string: write it or the parts."
     )
     street: str | None = None
     extended: str | None = Field(default=None, description="Apartment, suite, etc.")
@@ -132,36 +126,32 @@ class Address(Model):
     country: str | None = None
     country_code: str | None = Field(default=None, description="ISO 3166-1 alpha-2.")
     type: str | None = Field(default=None, description=_TYPE_DESC)
-    primary: bool = Field(default=False, description=_PRIMARY_DESC)
+    primary: bool = False
 
 
 class Organization(Model):
     name: str | None = Field(default=None, description="Company or organization name.")
     title: str | None = Field(default=None, description="Job title.")
     department: str | None = None
-    type: str | None = Field(default=None, description="'work', 'school', or custom.")
+    type: str | None = Field(default=None, description="e.g. work, school")
     current: bool | None = None
-    primary: bool = Field(default=False, description=_PRIMARY_DESC)
+    primary: bool = False
 
 
 class Url(Model):
     value: str = Field(min_length=1)
-    type: str | None = Field(
-        default=None, description="'home', 'work', 'blog', 'profile', 'homePage', or custom."
-    )
-    primary: bool = Field(default=False, description=_PRIMARY_DESC)
+    type: str | None = Field(default=None, description="e.g. home, work, blog, homePage")
+    primary: bool = False
 
 
 class Relation(Model):
     person: str = Field(min_length=1, description="The related person's name.")
-    type: str | None = Field(
-        default=None, description="'spouse', 'child', 'mother', 'friend', 'manager', or custom."
-    )
+    type: str | None = Field(default=None, description="e.g. spouse, child, friend, manager")
 
 
 class Event(Model):
     date: PartialDate
-    type: str | None = Field(default=None, description="'anniversary', 'other', or custom.")
+    type: str | None = Field(default=None, description="e.g. anniversary, other")
 
 
 class UserDefined(Model):
@@ -335,25 +325,18 @@ class OtherContactSearchResult(Model):
 # --- input: update operations ----------------------------------------------------------
 
 
+# Explicit operations on a multi-valued field. Existing values are never dropped silently:
+# use `remove` (by value) or `replace_all` ([] clears). `remove` and `set_primary` match by
+# value: e-mails case-insensitively, phone numbers by digits only, other fields by trimmed,
+# case-insensitive text (the address's formatted text, the organization's name, the
+# relation's person, the custom field's key, the event's date as YYYY-MM-DD or --MM-DD). A
+# `remove` that matches nothing is an error. The update tools' descriptions say all this
+# once, rather than every field's schema repeating it.
 class ListOps[T](Model):
-    """Explicit operations on a multi-valued field. Existing values are never dropped
-    silently: use ``remove`` (by value) or ``replace_all``.
-
-    ``remove`` and ``set_primary`` match by value: e-mails case-insensitively, phone
-    numbers by digits only, other fields by trimmed, case-insensitive text (the
-    address's formatted text, the organization's name, the relation's person, the
-    custom field's key, the event's date as YYYY-MM-DD or --MM-DD). A ``remove``
-    that matches nothing is an error.
-    """
-
-    add: list[T] = Field(default_factory=list, description="Values to append.")
-    remove: list[str] = Field(default_factory=list, description="Values to remove, by value.")
-    replace_all: list[T] | None = Field(
-        default=None, description="Replace every existing value with these ([] clears)."
-    )
-    set_primary: str | None = Field(
-        default=None, description="Make the value matching this the primary one."
-    )
+    add: list[T] = Field(default_factory=list)
+    remove: list[str] = Field(default_factory=list)
+    replace_all: list[T] | None = None
+    set_primary: str | None = None
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
