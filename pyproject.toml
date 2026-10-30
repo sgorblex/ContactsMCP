@@ -18,6 +18,9 @@ dependencies = [
     "pydantic>=2.12",
 ]
 
+[project.scripts]
+contacts-mcp = "contacts_mcp.cli:main"
+
 [dependency-groups]
 dev = [
     "mypy>=1.18",
