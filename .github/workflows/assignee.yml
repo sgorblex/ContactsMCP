@@ -20,6 +20,8 @@ env:
 jobs:
   assign:
     name: Assign author
+    # The release PR belongs to Release Please, not to whoever owns its token.
+    if: ${{ !startsWith(github.head_ref, 'release-please--') }}
     runs-on: ubuntu-latest
     steps:
       - name: Assign author

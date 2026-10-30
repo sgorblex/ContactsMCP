@@ -11,7 +11,7 @@ contacts.
 - **Safe to expose**: a per-account read-only flag, a tool allowlist, an audit log, and (over
   HTTP) OAuth against your own identity provider plus a user allowlist.
 - **Stdio for local use, streamable HTTP for deployment** behind your own reverse proxy.
-- A small container image.
+- A small container image, published for amd64 and arm64 with every release.
 
 Contents: [1. What it does](#1-what-it-does) · [2. Google Cloud setup](#2-google-cloud-setup) ·
 [3. Identity provider setup](#3-identity-provider-setup) ·
@@ -452,6 +452,11 @@ account: it creates a throwaway contact and label and deletes them again. It nev
 ```sh
 CONTACTS_MCP_SMOKE=1 mise exec -- uv run python scripts/smoke_test.py personal
 ```
+
+Releases are cut by [Release Please](https://github.com/googleapis/release-please) from the
+Conventional Commit titles on `main`: it keeps a release PR open with the next version and the
+generated `CHANGELOG.md`, and merging it tags the release, which builds the image
+and pushes it to GHCR as `:<version>` and `:latest` for `linux/amd64` and `linux/arm64`.
 
 [`docs/DESIGN.md`](docs/DESIGN.md) describes the module layout and how the pieces fit.
 

@@ -12,7 +12,7 @@
     "`minimumReleaseAge` holds a new release for a week before it is proposed."
   ],
   "vulnerabilityAlerts": {
-    "description": "Security updates skip dashboard approval, so `automerge: false` keeps a person in front of every merge. `fix` records them as fixes rather than chores.",
+    "description": "`chore` commits cut no release, so a `chore(deps):` security fix would reach the published image only with some unrelated release. `fix` makes a security update a patch release on its own. These skip dashboard approval, so `automerge: false` keeps a person in front of every merge.",
     "semanticCommitType": "fix",
     "automerge": false
   },
