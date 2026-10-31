@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.0](https://github.com/sgorblex/ContactsMCP/compare/v0.1.0...v0.2.0) (2026-10-31)
+
+
+### Features
+
+* add a settings page to manage linked accounts from the browser ([#20](https://github.com/sgorblex/ContactsMCP/issues/20)) ([e730bf1](https://github.com/sgorblex/ContactsMCP/commit/e730bf117275e956598726c78397c2f131398820))
+* link and re-link Google accounts from the settings page ([#21](https://github.com/sgorblex/ContactsMCP/issues/21)) ([f57323b](https://github.com/sgorblex/ContactsMCP/commit/f57323b725910daad3caf27976717f09facdc093))
+
 ## 0.1.0 (2026-10-30)
 
 
