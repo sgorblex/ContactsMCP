@@ -62,7 +62,7 @@ def _split_list(value: str | None) -> list[str]:
 
 
 class GoogleClientConfig(BaseModel):
-    """The Google Cloud OAuth client (type *Desktop app*) shared by every account."""
+    """A Google Cloud OAuth client: the *Desktop app* one, or the optional *Web application* one."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -97,8 +97,33 @@ def load_google_client(env: Mapping[str, str] | None = None) -> GoogleClientConf
     return GoogleClientConfig(client_id=client_id, client_secret=SecretStr(client_secret))
 
 
-def _load_client_secrets_file(path: Path) -> GoogleClientConfig:
-    name = "GOOGLE_CLIENT_SECRETS_FILE"
+def load_google_web_client(env: Mapping[str, str] | None = None) -> GoogleClientConfig | None:
+    """The optional *Web application* client the settings page links accounts with.
+
+    From ``GOOGLE_WEB_CLIENT_ID``/``GOOGLE_WEB_CLIENT_SECRET`` or
+    ``GOOGLE_WEB_CLIENT_SECRETS_FILE``; ``None`` when none is set.
+    """
+    env = os.environ if env is None else env
+    client_id = read_secret(env, "GOOGLE_WEB_CLIENT_ID")
+    client_secret = read_secret(env, "GOOGLE_WEB_CLIENT_SECRET")
+    secrets_file = _get(env, "GOOGLE_WEB_CLIENT_SECRETS_FILE")
+    if secrets_file is not None:
+        if client_id is not None or client_secret is not None:
+            raise ConfigError(
+                "Set either GOOGLE_WEB_CLIENT_SECRETS_FILE or GOOGLE_WEB_CLIENT_ID and "
+                "GOOGLE_WEB_CLIENT_SECRET, not both"
+            )
+        return _load_web_client_secrets_file(Path(secrets_file))
+    if client_id is None and client_secret is None:
+        return None
+    if client_id is None:
+        raise ConfigError("GOOGLE_WEB_CLIENT_ID is required with GOOGLE_WEB_CLIENT_SECRET")
+    if client_secret is None:
+        raise ConfigError("GOOGLE_WEB_CLIENT_SECRET is required with GOOGLE_WEB_CLIENT_ID")
+    return GoogleClientConfig(client_id=client_id, client_secret=SecretStr(client_secret))
+
+
+def _read_client_secrets_file(name: str, path: Path) -> dict[str, object]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except OSError as e:
@@ -107,19 +132,41 @@ def _load_client_secrets_file(path: Path) -> GoogleClientConfig:
         raise ConfigError(f"{name}: {path} is not valid JSON") from e
     if not isinstance(data, dict):
         raise ConfigError(f"{name}: {path} is not a Google OAuth client file")
+    return data
+
+
+def _client_from_section(
+    name: str, path: Path, section: object, key: str, kind: str
+) -> GoogleClientConfig:
+    if not isinstance(section, dict):
+        raise ConfigError(f"{name}: {path} has no '{key}' section ({kind} client)")
+    client_id = section.get("client_id")
+    client_secret = section.get("client_secret")
+    if not isinstance(client_id, str) or not isinstance(client_secret, str):
+        raise ConfigError(f"{name}: {path} lacks client_id or client_secret")
+    return GoogleClientConfig(client_id=client_id, client_secret=SecretStr(client_secret))
+
+
+def _load_web_client_secrets_file(path: Path) -> GoogleClientConfig:
+    name = "GOOGLE_WEB_CLIENT_SECRETS_FILE"
+    data = _read_client_secrets_file(name, path)
+    if "installed" in data:
+        raise ConfigError(
+            f"{name}: {path} is a 'Desktop app' client; the settings page needs one of type "
+            "'Web application' (GOOGLE_CLIENT_SECRETS_FILE takes the Desktop app client)"
+        )
+    return _client_from_section(name, path, data.get("web"), "web", "Web application")
+
+
+def _load_client_secrets_file(path: Path) -> GoogleClientConfig:
+    name = "GOOGLE_CLIENT_SECRETS_FILE"
+    data = _read_client_secrets_file(name, path)
     if "web" in data:
         raise ConfigError(
             f"{name}: {path} is a 'Web application' client; create an OAuth client of "
             "type 'Desktop app' instead (the account-linking flow uses a loopback redirect)"
         )
-    installed = data.get("installed")
-    if not isinstance(installed, dict):
-        raise ConfigError(f"{name}: {path} has no 'installed' section (Desktop app client)")
-    client_id = installed.get("client_id")
-    client_secret = installed.get("client_secret")
-    if not isinstance(client_id, str) or not isinstance(client_secret, str):
-        raise ConfigError(f"{name}: {path} lacks client_id or client_secret")
-    return GoogleClientConfig(client_id=client_id, client_secret=SecretStr(client_secret))
+    return _client_from_section(name, path, data.get("installed"), "installed", "Desktop app")
 
 
 class HttpSettings(BaseModel):

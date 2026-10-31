@@ -2,9 +2,12 @@
 
 Only in HTTP mode, with ``CONTACTS_MCP_SETTINGS_PAGE``. Every route needs a session from
 :mod:`contacts_mcp.web.session`. Every POST must come from this origin (``Origin``, else
-``Sec-Fetch-Site: same-origin``) and carry the session's CSRF token; removing an account
-also needs a recent sign-in. Changes go through the account store, then
+``Sec-Fetch-Site: same-origin``) and carry the session's CSRF token; removing or re-linking
+an account also needs a recent sign-in. Changes go through the account store, then
 ``registry.reload()``, so the tools see them at once; each one leaves an audit line.
+
+Linking needs the optional *Web application* Google client: Google redirects back to
+:data:`GOOGLE_CALLBACK_PATH`, and the link started by this session is completed there.
 """
 
 from __future__ import annotations
@@ -13,25 +16,39 @@ import logging
 import secrets
 import time
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlsplit
 
 from fastmcp import FastMCP
+from pydantic import SecretStr
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 
-from contacts_mcp.accounts import AccountFileError, validate_alias
-from contacts_mcp.config import HttpSettings
-from contacts_mcp.linking import revoke
+from contacts_mcp.accounts import AccountFileError, AccountRecord, validate_alias
+from contacts_mcp.config import GoogleClientConfig, HttpSettings
+from contacts_mcp.google.oauth import AUTH_URL
+from contacts_mcp.linking import (
+    LinkError,
+    LinkErrorKind,
+    authorization_url,
+    complete_link,
+    new_pkce,
+    new_state,
+    revoke,
+)
 from contacts_mcp.logs import AuditOutcome, audit
 from contacts_mcp.oidc import AllowlistOIDCProxy
 from contacts_mcp.registry import Account, AccountRegistry
 from contacts_mcp.web.page import escape, layout, message_page, page_response
 from contacts_mcp.web.session import (
     CALLBACK_PATH,
+    MAX_PENDING,
+    PENDING_SECONDS,
     PREFIX,
     SIGNIN_COOKIE,
     BrowserSignIn,
+    Expiring,
     Session,
     SignInError,
 )
@@ -41,6 +58,26 @@ log = logging.getLogger(__name__)
 MAX_FORM_BYTES = 4096
 Handler = Callable[[Request], Awaitable[Response]]
 STATUS_LABELS = {"ok": "OK", "needs_relink": "Needs re-link", "unreadable": "Unreadable"}
+GOOGLE_CALLBACK_PATH = f"{PREFIX}/google/callback"
+_GOOGLE_AUTH = urlsplit(AUTH_URL)
+GOOGLE_ORIGIN = f"{_GOOGLE_AUTH.scheme}://{_GOOGLE_AUTH.netloc}"
+#: What to do about a linking failure, on the page.
+LINK_HINTS: dict[LinkErrorKind, str] = {
+    "invalid_grant": "Link the account again.",
+    "redirect_uri_mismatch": "Add {redirect_uri} to the Web client's authorized redirect URIs.",
+    "invalid_client": "Check GOOGLE_WEB_CLIENT_ID and GOOGLE_WEB_CLIENT_SECRET.",
+}
+
+
+@dataclass
+class PendingLink:
+    verifier: str
+    alias: str
+    #: ``None`` on a re-link: keep the account's current setting.
+    read_only: bool | None
+    relink: bool
+    #: Binds the link to the session that started it.
+    session_csrf: str
 
 
 class ForeignRequestError(Exception):
@@ -56,6 +93,8 @@ class SettingsPage:
         self.signin = signin
         base = urlsplit(http_settings.base_url)
         self.origin = f"{base.scheme}://{base.netloc}".lower()
+        self.google_redirect_uri = http_settings.base_url + GOOGLE_CALLBACK_PATH
+        self._links: Expiring[PendingLink] = Expiring(PENDING_SECONDS, MAX_PENDING)
 
     # -- plumbing -------------------------------------------------------------------
 
@@ -67,7 +106,7 @@ class SettingsPage:
         )
 
     def _form_action_origins(self) -> list[str]:
-        return [self.signin.provider_origin]
+        return [self.signin.provider_origin, GOOGLE_ORIGIN]
 
     async def _form(self, request: Request, session: Session) -> dict[str, str]:
         """The POSTed form, once it is shown to come from this page. Raises ForeignRequestError."""
@@ -106,7 +145,7 @@ class SettingsPage:
         alias: str,
         session: Session,
         outcome: AuditOutcome,
-        detail: str,
+        detail: str | None,
         fields: tuple[str, ...] = (),
     ) -> None:
         audit(
@@ -234,6 +273,157 @@ Contacts stay in Google.</p>
             )
         return self._back(session, notice)
 
+    async def link(self, request: Request) -> Response:
+        session = self.signin.session(request)
+        if session is None:
+            return self.signin.start(PREFIX)
+        try:
+            form = await self._form(request, session)
+        except ForeignRequestError:
+            return self._forbidden()
+        client = self.registry.web_google
+        if client is None:
+            return self._back(session, "Linking from this page is not configured.")
+        alias = form.get("alias", "").strip().lower()
+        try:
+            validate_alias(alias)
+        except ValueError as e:
+            return self._back(session, str(e))
+        if self._account(alias) is not None:
+            return self._back(session, f"'{alias}' is already linked: use its Re-link button.")
+        return self._to_google(client, session, alias, form.get("read_only") == "on", relink=False)
+
+    async def relink(self, request: Request) -> Response:
+        session = self.signin.session(request)
+        if session is None:
+            return self.signin.start(PREFIX)
+        try:
+            await self._form(request, session)
+        except ForeignRequestError:
+            return self._forbidden()
+        client = self.registry.web_google
+        if client is None:
+            return self._back(session, "Linking from this page is not configured.")
+        account = self._account(request.path_params["alias"])
+        if account is None:
+            return self._back(session, "That account is not linked.")
+        if not session.is_fresh(time.time()):
+            return self.signin.start(
+                PREFIX,
+                step_up=True,
+                notice=f"You signed in again: press Re-link for '{account.alias}' once more.",
+            )
+        return self._to_google(
+            client, session, account.alias, None, relink=True, login_hint=account.email
+        )
+
+    def _to_google(
+        self,
+        client: GoogleClientConfig,
+        session: Session,
+        alias: str,
+        read_only: bool | None,
+        *,
+        relink: bool,
+        login_hint: str | None = None,
+    ) -> Response:
+        pkce = new_pkce()
+        state = new_state()
+        self._links.put(state, PendingLink(pkce.verifier, alias, read_only, relink, session.csrf))
+        url = authorization_url(
+            client,
+            self.google_redirect_uri,
+            state,
+            pkce.challenge,
+            login_hint=login_hint,
+        )
+        return RedirectResponse(url, status_code=303)
+
+    async def google_callback(self, request: Request) -> Response:
+        session = self.signin.session(request)
+        if session is None:
+            return message_page(
+                "Not linked",
+                "Your session ended before Google answered. Sign in and link the account again.",
+                status_code=403,
+                link=PREFIX,
+            )
+        params = request.query_params
+        state = params.get("state", "")
+        pending = self._links.pop(state) if state else None
+        if pending is None or not secrets.compare_digest(
+            pending.session_csrf.encode(), session.csrf.encode()
+        ):
+            return self._back(
+                session, "That link expired or was not started here. Link the account again."
+            )
+        alias = pending.alias
+        tool = "settings.relink" if pending.relink else "settings.link"
+        error = params.get("error")
+        if error:
+            self._audit(tool, alias, session, "refused", f"google: {error[:100]}")
+            if error == "access_denied":
+                return self._back(session, f"Linking '{alias}' was cancelled at Google.")
+            return self._back(session, f"Google reported an error: {error[:100]}")
+        web_google = self.registry.web_google
+        if web_google is None:
+            return self._back(session, "Linking from this page is not configured any more.")
+        code = params.get("code")
+        if not code:
+            return self._back(session, "Google sent no authorization code. Link again.")
+        store = self.registry.store
+        existing: AccountRecord | None = None
+        if pending.relink:
+            try:
+                existing = store.load(alias)
+            except AccountFileError:
+                self._audit(tool, alias, session, "refused", "account file unreadable or gone")
+                return self._back(
+                    session,
+                    f"'{alias}' was removed or its file cannot be read: remove it and link it "
+                    "again.",
+                )
+        elif store.path(alias).exists():
+            self._audit(tool, alias, session, "refused", "alias taken")
+            return self._back(session, f"'{alias}' was linked meanwhile: use its Re-link button.")
+
+        try:
+            grant = await complete_link(
+                self.registry.http, web_google, code, self.google_redirect_uri, pending.verifier
+            )
+        except LinkError as e:
+            hint = LINK_HINTS.get(e.kind, "") if e.kind else ""
+            hint = hint.format(redirect_uri=self.google_redirect_uri)
+            self._audit(tool, alias, session, "error", e.kind or "link failed")
+            return self._back(session, f"Could not link '{alias}': {e} {hint}".strip())
+
+        read_only = existing.read_only if existing is not None else bool(pending.read_only)
+        record = AccountRecord(
+            alias=alias,
+            email=grant.email,
+            refresh_token=SecretStr(grant.refresh_token),
+            scopes=grant.scopes,
+            read_only=read_only,
+            linked_at=datetime.now(UTC),
+            client="web",
+        )
+        try:
+            store.save(record)
+        except (OSError, AccountFileError) as e:
+            self._audit(tool, alias, session, "error", f"save: {_reason(e)}")
+            return self._back(session, f"Could not save '{alias}': {_reason(e)}")
+        self.registry.reload()
+        changed = existing is not None and existing.email != grant.email
+        self._audit(tool, alias, session, "ok", "google account changed" if changed else None)
+        notice = (
+            f"Linked {grant.email or 'the account'} as '{alias}'"
+            + (" (read-only)" if read_only else "")
+            + "."
+        )
+        if changed and existing is not None and existing.email:
+            notice += f" It was linked to {existing.email} before."
+        return self._back(session, notice)
+
     # -- rendering ------------------------------------------------------------------
 
     def _render_index(self, session: Session, notice: str | None) -> str:
@@ -257,9 +447,22 @@ Contacts stay in Google.</p>
 {self._render_link_section(csrf)}"""
 
     def _render_link_section(self, csrf: str) -> str:
-        return """<h2>Link an account</h2>
-<p class="hint">Link accounts on the server with <code>contacts-mcp auth add &lt;alias&gt;</code>;
-then send the server a <code>SIGHUP</code> (or restart it).</p>"""
+        if self.registry.web_google is None:
+            return """<h2>Link an account</h2>
+<p class="hint">Linking from this page needs a Google OAuth client of type
+<em>Web application</em> (<code>GOOGLE_WEB_CLIENT_ID</code> and
+<code>GOOGLE_WEB_CLIENT_SECRET</code>). Until then, link accounts on the server with
+<code>contacts-mcp auth add &lt;alias&gt;</code>; then send the server a <code>SIGHUP</code>.</p>"""
+        return f"""<h2>Link an account</h2>
+<form method="post" action="{PREFIX}/link">
+<input type="hidden" name="csrf" value="{csrf}">
+<label for="alias">Alias</label>
+<input type="text" id="alias" name="alias" required maxlength="32"
+ pattern="[a-z0-9][a-z0-9\\-]{{0,31}}" autocomplete="off">
+<p class="hint">1-32 lowercase letters, digits and '-': the name tools use for the account.</p>
+<label class="inline"><input type="checkbox" name="read_only" value="on"> Read-only</label>
+<div class="actions"><button type="submit">Link with Google</button></div>
+</form>"""
 
     def _render_row(self, account: Account, csrf: str) -> str:
         alias = escape(account.alias)
@@ -276,10 +479,14 @@ then send the server a <code>SIGHUP</code> (or restart it).</p>"""
             toggle = f"""<form method="post" action="{PREFIX}/accounts/{alias}/read-only">
 <input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="value" value="{value}">
 <button type="submit">{label}</button></form>"""
+        relink = ""
+        if self.registry.web_google is not None:
+            relink = f"""<form method="post" action="{PREFIX}/accounts/{alias}/relink">
+<input type="hidden" name="csrf" value="{csrf}"><button type="submit">Re-link</button></form>"""
         remove = f'<a href="{PREFIX}/accounts/{alias}/remove">Remove</a>'
         return f"""<tr><td>{alias}</td><td>{escape(account.email or "-")}</td><td>{status}</td>
 <td>{"Read-only" if account.read_only else "Read-write"}</td><td>{linked}</td>
-<td>{toggle} {remove}</td></tr>"""
+<td>{toggle} {relink} {remove}</td></tr>"""
 
 
 def _reason(e: OSError | AccountFileError) -> str:
@@ -326,4 +533,7 @@ def register_settings_page(
         by_alias(page.confirm_remove)
     )
     mcp.custom_route(f"{PREFIX}/accounts/{{alias}}/remove", methods=["POST"])(by_alias(page.remove))
+    mcp.custom_route(f"{PREFIX}/link", methods=["POST"])(page.link)
+    mcp.custom_route(f"{PREFIX}/accounts/{{alias}}/relink", methods=["POST"])(by_alias(page.relink))
+    mcp.custom_route(GOOGLE_CALLBACK_PATH, methods=["GET"])(page.google_callback)
     return page

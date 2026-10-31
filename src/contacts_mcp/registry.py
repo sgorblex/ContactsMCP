@@ -151,10 +151,13 @@ class AccountRegistry:
         google: GoogleClientConfig,
         http: httpx.AsyncClient,
         *,
+        web_google: GoogleClientConfig | None = None,
         people_factory: PeopleFactory | None = None,
     ) -> None:
         self.store = store
         self.google = google
+        #: The optional Web application client, for accounts the settings page linked.
+        self.web_google = web_google
         self.http = http
         self._people_factory: PeopleFactory = people_factory or (lambda h, t: PeopleClient(h, t))
         self._accounts: dict[str, Account] = {}
@@ -187,9 +190,20 @@ class AccountRegistry:
                 current.record = result
                 accounts[alias] = current
                 continue
-            tokens = TokenProvider(
-                alias, self.google, result.refresh_token.get_secret_value(), self.http
-            )
+            client = self.google if result.client == "desktop" else self.web_google
+            if client is None:
+                accounts[alias] = Account(
+                    alias,
+                    None,
+                    None,
+                    None,
+                    error="linked on the settings page with the Web application client, which "
+                    "is not configured (GOOGLE_WEB_CLIENT_ID / GOOGLE_WEB_CLIENT_SECRET, or "
+                    "GOOGLE_WEB_CLIENT_SECRETS_FILE)",
+                )
+                continue
+            token = result.refresh_token.get_secret_value()
+            tokens = TokenProvider(alias, client, token, self.http)
             accounts[alias] = Account(
                 alias, result, self._people_factory(self.http, tokens), tokens
             )

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import html
+import json
 import logging
 import re
 import time
@@ -19,8 +21,9 @@ from pydantic import SecretStr
 
 from contacts_mcp.accounts import AccountFileStore, AccountRecord
 from contacts_mcp.config import GoogleClientConfig, Settings
-from contacts_mcp.fields import SCOPES
-from contacts_mcp.google.oauth import REVOKE_URL
+from contacts_mcp.fields import PEOPLE_API_URL, SCOPES
+from contacts_mcp.google.oauth import AUTH_URL, REVOKE_URL, TOKEN_URL
+from contacts_mcp.linking import LINK_SCOPES
 from contacts_mcp.registry import AccountRegistry
 from contacts_mcp.server import build_server, http_app_options
 from contacts_mcp.web import settings as settings_module
@@ -29,7 +32,11 @@ from tests._oidc import BASE_URL, DISCOVERY, fake_discovery, http_settings, id_t
 TOKEN_ENDPOINT = DISCOVERY["token_endpoint"]
 AUTHORIZE_ENDPOINT = DISCOVERY["authorization_endpoint"]
 REFRESH = "1//refresh-token-of-work"
-SECRET_VALUES = (REFRESH, "oidc-client-secret", "idp-code")
+NEW_REFRESH = "1//refresh-token-from-the-page"
+GOOGLE_CODE = "4/google-code"
+SECRET_VALUES = (REFRESH, NEW_REFRESH, GOOGLE_CODE, "oidc-client-secret", "idp-code", "web-secret")
+WEB_CLIENT = GoogleClientConfig(client_id="web-client-id", client_secret=SecretStr("web-secret"))
+CONNECTIONS = f"{PEOPLE_API_URL}/people/me/connections"
 
 
 def make_settings(*, settings_page: bool = True) -> Settings:
@@ -62,8 +69,36 @@ def idp() -> Iterator[respx.MockRouter]:
     with respx.mock(assert_all_called=False, assert_all_mocked=False) as router:
         router.post(TOKEN_ENDPOINT, name="token")
         router.post(REVOKE_URL, name="revoke").mock(return_value=httpx.Response(200))
+        router.post(TOKEN_URL, name="google_token").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "access_token": "ya29.page",
+                    "refresh_token": NEW_REFRESH,
+                    "scope": " ".join(LINK_SCOPES),
+                    "id_token": google_id_token("new@example.com"),
+                },
+            )
+        )
+        router.get(CONNECTIONS, name="people").mock(
+            return_value=httpx.Response(200, json={"totalPeople": 0})
+        )
         signs_in_as(router, "owner@example.com")
         yield router
+
+
+def google_id_token(email: str) -> str:
+    payload = base64.urlsafe_b64encode(
+        json.dumps(
+            {
+                "iss": "https://accounts.google.com",
+                "aud": WEB_CLIENT.client_id,
+                "email": email,
+                "email_verified": True,
+            }
+        ).encode()
+    )
+    return f"e30.{payload.rstrip(b'=').decode()}.sig"
 
 
 def signs_in_as(
@@ -89,7 +124,7 @@ def store(tmp_path: Path) -> AccountFileStore:
 async def registry(store: AccountFileStore) -> AsyncIterator[AccountRegistry]:
     async with httpx.AsyncClient() as http:
         google = GoogleClientConfig(client_id="client-id", client_secret=SecretStr("secret"))
-        registry = AccountRegistry(store, google, http)
+        registry = AccountRegistry(store, google, http, web_google=WEB_CLIENT)
         registry.reload()
         yield registry
 
@@ -192,7 +227,7 @@ async def test_page_headers(client: httpx.AsyncClient) -> None:
     response = await client.get("/settings")
     csp = response.headers["content-security-policy"]
     assert "default-src 'none'" in csp
-    assert "form-action 'self' https://auth.example.com" in csp
+    assert "form-action 'self' https://auth.example.com https://accounts.google.com" in csp
     assert response.headers["x-frame-options"] == "DENY"
     assert response.headers["cache-control"] == "no-store"
 
@@ -436,3 +471,222 @@ async def test_unknown_or_invalid_alias(client: httpx.AsyncClient) -> None:
     response = await post(client, "/settings/accounts/nobody/read-only", {"csrf": csrf})
     assert response.status_code == 303
     assert "Could not change 'nobody'" in html.unescape((await client.get("/settings")).text)
+
+
+# -- linking --------------------------------------------------------------------------
+
+
+async def to_google(response: httpx.Response) -> dict[str, str]:
+    assert response.status_code == 303
+    location = urlsplit(response.headers["location"])
+    assert f"{location.scheme}://{location.netloc}{location.path}" == AUTH_URL
+    return {k: v[0] for k, v in parse_qs(location.query).items()}
+
+
+async def test_link_a_new_account(
+    client: httpx.AsyncClient,
+    registry: AccountRegistry,
+    store: AccountFileStore,
+    idp: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    page, csrf = await signed_in_page(client)
+    assert 'action="/settings/link"' in page
+    caplog.set_level(logging.INFO, logger="contacts_mcp.audit")
+    params = await to_google(
+        await post(client, "/settings/link", {"csrf": csrf, "alias": "Home", "read_only": "on"})
+    )
+    assert params["client_id"] == "web-client-id"
+    assert params["redirect_uri"] == f"{BASE_URL}/settings/google/callback"
+    assert params["access_type"] == "offline"
+    assert params["code_challenge_method"] == "S256"
+
+    response = await client.get(
+        "/settings/google/callback", params={"code": GOOGLE_CODE, "state": params["state"]}
+    )
+    assert response.status_code == 303
+    record = store.load("home")
+    assert record.client == "web"
+    assert record.email == "new@example.com"
+    assert record.read_only is True
+    assert record.refresh_token.get_secret_value() == NEW_REFRESH
+    assert "home" in registry.aliases()
+    assert registry.resolve("home").status == "ok"
+    exchange = parse_qs(idp["google_token"].calls.last.request.content.decode())
+    assert exchange["client_id"] == ["web-client-id"]
+    assert exchange["redirect_uri"] == [f"{BASE_URL}/settings/google/callback"]
+    text = html.unescape((await client.get("/settings")).text)
+    assert "Linked new@example.com as 'home' (read-only)." in text
+    for secret in SECRET_VALUES:
+        assert secret not in text
+    line = next(r for r in caplog.records if getattr(r, "kind", None) == "audit")
+    assert line.tool == "settings.link"  # type: ignore[attr-defined]
+
+
+async def test_link_refuses_a_taken_or_invalid_alias(
+    client: httpx.AsyncClient, store: AccountFileStore
+) -> None:
+    _, csrf = await signed_in_page(client)
+    response = await post(client, "/settings/link", {"csrf": csrf, "alias": "work"})
+    assert response.status_code == 303
+    assert response.headers["location"] == "/settings"
+    assert "already linked" in (await client.get("/settings")).text
+    response = await post(client, "/settings/link", {"csrf": csrf, "alias": "no way"})
+    assert response.headers["location"] == "/settings"
+    assert "invalid account alias" in (await client.get("/settings")).text
+
+
+async def test_google_callback_needs_the_session_that_started_it(
+    client: httpx.AsyncClient, store: AccountFileStore
+) -> None:
+    _, csrf = await signed_in_page(client)
+    params = await to_google(await post(client, "/settings/link", {"csrf": csrf, "alias": "home"}))
+    # Another session (here: the same browser, signed in again) cannot complete it.
+    client.cookies.delete("__Host-contacts_session")
+    await signed_in_page(client)
+    response = await client.get(
+        "/settings/google/callback", params={"code": GOOGLE_CODE, "state": params["state"]}
+    )
+    assert response.status_code == 303
+    assert "not started here" in (await client.get("/settings")).text
+    assert not store.path("home").exists()
+
+
+async def test_google_callback_without_a_session(client: httpx.AsyncClient) -> None:
+    response = await client.get(
+        "/settings/google/callback", params={"code": GOOGLE_CODE, "state": "x"}
+    )
+    assert response.status_code == 403
+
+
+async def test_link_cancelled_at_google(client: httpx.AsyncClient, store: AccountFileStore) -> None:
+    _, csrf = await signed_in_page(client)
+    params = await to_google(await post(client, "/settings/link", {"csrf": csrf, "alias": "home"}))
+    await client.get(
+        "/settings/google/callback", params={"error": "access_denied", "state": params["state"]}
+    )
+    assert "cancelled" in (await client.get("/settings")).text
+    assert not store.path("home").exists()
+
+
+async def test_link_failure_names_the_fix(
+    client: httpx.AsyncClient, store: AccountFileStore, idp: respx.MockRouter
+) -> None:
+    idp["google_token"].mock(
+        return_value=httpx.Response(400, json={"error": "redirect_uri_mismatch"})
+    )
+    _, csrf = await signed_in_page(client)
+    params = await to_google(await post(client, "/settings/link", {"csrf": csrf, "alias": "home"}))
+    await client.get(
+        "/settings/google/callback", params={"code": GOOGLE_CODE, "state": params["state"]}
+    )
+    text = (await client.get("/settings")).text
+    assert "redirect_uri_mismatch" in text
+    assert f"{BASE_URL}/settings/google/callback" in text
+    assert not store.path("home").exists()
+
+
+@pytest.mark.parametrize(
+    ("path", "form"),
+    [("/settings/link", {"alias": "home"}), ("/settings/accounts/work/relink", {})],
+)
+@pytest.mark.parametrize("origin", ["https://evil.example", None])
+async def test_forged_link_posts_are_refused(
+    client: httpx.AsyncClient, path: str, form: dict[str, str], origin: str | None
+) -> None:
+    _, csrf = await signed_in_page(client)
+    response = await post(client, path, {"csrf": csrf, **form}, origin=origin)
+    assert response.status_code == 403
+    response = await post(client, path, {"csrf": "wrong", **form})
+    assert response.status_code == 403
+
+
+async def test_link_callback_cannot_be_replayed(
+    client: httpx.AsyncClient, store: AccountFileStore
+) -> None:
+    _, csrf = await signed_in_page(client)
+    params = await to_google(await post(client, "/settings/link", {"csrf": csrf, "alias": "home"}))
+    query = {"code": GOOGLE_CODE, "state": params["state"]}
+    await client.get("/settings/google/callback", params=query)
+    first = store.load("home").linked_at
+    await client.get("/settings/google/callback", params=query)
+    assert "expired or was not started here" in (await client.get("/settings")).text
+    assert store.load("home").linked_at == first
+
+
+async def test_alias_linked_meanwhile_is_not_replaced(
+    client: httpx.AsyncClient, store: AccountFileStore
+) -> None:
+    _, csrf = await signed_in_page(client)
+    params = await to_google(await post(client, "/settings/link", {"csrf": csrf, "alias": "home"}))
+    seed(store, "home")
+    await client.get(
+        "/settings/google/callback", params={"code": GOOGLE_CODE, "state": params["state"]}
+    )
+    assert store.load("home").refresh_token.get_secret_value() == REFRESH
+    assert "linked meanwhile" in html.unescape((await client.get("/settings")).text)
+
+
+async def test_relink_of_a_removed_account_is_refused(
+    client: httpx.AsyncClient, store: AccountFileStore
+) -> None:
+    _, csrf = await signed_in_page(client)
+    params = await to_google(await post(client, "/settings/accounts/work/relink", {"csrf": csrf}))
+    store.delete("work")
+    await client.get(
+        "/settings/google/callback", params={"code": GOOGLE_CODE, "state": params["state"]}
+    )
+    assert not store.path("work").exists()
+    assert "was removed or its file cannot be read" in html.unescape(
+        (await client.get("/settings")).text
+    )
+
+
+async def test_relink_keeps_read_only_and_needs_a_fresh_sign_in(
+    client: httpx.AsyncClient, store: AccountFileStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed(store, "work", read_only=True)
+    _, csrf = await signed_in_page(client)
+
+    later = time.time() + 11 * 60
+
+    class Clock:
+        @staticmethod
+        def time() -> float:
+            return later
+
+    with monkeypatch.context() as m:
+        m.setattr(settings_module, "time", Clock)
+        stale = await post(client, "/settings/accounts/work/relink", {"csrf": csrf})
+        assert parse_qs(urlsplit(stale.headers["location"]).query)["max_age"] == ["60"]
+
+    params = await to_google(await post(client, "/settings/accounts/work/relink", {"csrf": csrf}))
+    assert params["login_hint"] == "work@example.com"
+    await client.get(
+        "/settings/google/callback", params={"code": GOOGLE_CODE, "state": params["state"]}
+    )
+    record = store.load("work")
+    assert record.client == "web"
+    assert record.read_only is True
+    assert record.refresh_token.get_secret_value() == NEW_REFRESH
+    assert "linked to work@example.com before" in (await client.get("/settings")).text
+
+
+async def test_without_a_web_client_the_page_explains(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    store: AccountFileStore,
+    idp: respx.MockRouter,
+) -> None:
+    fake_discovery(monkeypatch, tmp_path)
+    seed(store)
+    async with httpx.AsyncClient() as http:
+        google = GoogleClientConfig(client_id="client-id", client_secret=SecretStr("secret"))
+        registry = AccountRegistry(store, google, http)
+        registry.reload()
+        async with app_client(registry, make_settings()) as c:
+            page, csrf = await signed_in_page(c)
+            assert "GOOGLE_WEB_CLIENT_ID" in page
+            assert "Re-link" not in page
+            response = await post(c, "/settings/link", {"csrf": csrf, "alias": "home"})
+            assert response.headers["location"] == "/settings"

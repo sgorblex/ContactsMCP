@@ -86,6 +86,19 @@ def test_file_holds_the_token_as_plain_text_and_utc_timestamp(real_store: Accoun
     assert data["alias"] == "work"
     assert data["scopes"] == list(SCOPES)
     assert data["version"] == 1
+    assert data["client"] == "desktop"
+
+
+def test_files_without_a_client_were_linked_with_the_desktop_client(
+    real_store: AccountFileStore,
+) -> None:
+    real_store.save(record(client="web"))
+    assert real_store.load("work").client == "web"
+    path = real_store.accounts_dir / "work.json"
+    data = json.loads(path.read_text())
+    del data["client"]
+    path.write_text(json.dumps(data))
+    assert real_store.load("work").client == "desktop"
 
 
 def test_naive_timestamps_are_read_as_utc(real_store: AccountFileStore) -> None:
@@ -375,3 +388,22 @@ async def test_registry_reload_of_a_file_fixed_in_place(
     real_store.save(record("work"))
     registry.reload()
     assert registry.all()[0].status == "ok"
+
+
+async def test_registry_refreshes_each_account_with_the_client_that_linked_it(
+    real_store: AccountFileStore, google_client: GoogleClientConfig, http: httpx.AsyncClient
+) -> None:
+    web = GoogleClientConfig(client_id="web-id", client_secret=SecretStr("web-secret"))
+    real_store.save(record("work"))
+    real_store.save(record("home", client="web"))
+
+    registry = AccountRegistry(store=real_store, google=google_client, http=http, web_google=web)
+    registry.reload()
+    clients = {a.alias: a.tokens._client for a in registry.all() if a.tokens is not None}
+    assert clients == {"work": google_client, "home": web}
+
+    without_web = make_registry(real_store, google_client, http)
+    without_web.reload()
+    home = next(a for a in without_web.all() if a.alias == "home")
+    assert home.status == "unreadable"
+    assert "GOOGLE_WEB_CLIENT_ID" in (home.error or "")
