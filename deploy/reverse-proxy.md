@@ -7,7 +7,8 @@ proxy that does, and give the proxy the public name MCP clients will use (the ex
 ## What the proxy must do
 
 - Terminate TLS and forward everything under the host (`/mcp`, `/.well-known/…`, `/authorize`,
-  `/token`, `/register`, `/auth/callback`, `/healthz`) to `127.0.0.1:8000`. Do not rewrite paths.
+  `/token`, `/register`, `/auth/callback`, `/healthz`, and `/settings` with the settings page) to
+  `127.0.0.1:8000`. Do not rewrite paths.
 - Pass `Host` through (or set it to the public name) and send `X-Forwarded-Proto: https` and
   `X-Forwarded-For`.
 - Not buffer responses and not cut idle connections early. The MCP endpoint is streamable HTTP:
@@ -21,7 +22,7 @@ The public URL is part of the OAuth setup, so these must agree:
 | Where | Value |
 | --- | --- |
 | `CONTACTS_MCP_BASE_URL` | `https://contacts.example.com` (scheme and host as clients see them, no path) |
-| Identity provider redirect URI | `https://contacts.example.com/auth/callback` |
+| Identity provider redirect URI | `https://contacts.example.com/auth/callback` (and `/settings/auth/callback` with the settings page) |
 | Proxy site name | `contacts.example.com` |
 
 The server only accepts requests whose `Host` is the host of `CONTACTS_MCP_BASE_URL` (DNS

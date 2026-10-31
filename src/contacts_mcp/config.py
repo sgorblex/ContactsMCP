@@ -145,6 +145,8 @@ class HttpSettings(BaseModel):
     verify_id_token: bool = False
     trust_forwarded: bool
     forwarded_allow_ips: str
+    #: Serve the account settings page at ``/settings``.
+    settings_page: bool = False
 
     @property
     def public_host(self) -> str:
@@ -205,6 +207,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         raise ConfigError(f"{p}LOG_LEVEL must be DEBUG, INFO, WARNING or ERROR, not {log_level!r}")
 
     http = _load_http_settings(env) if transport == "http" else None
+    if http is None and _bool(env, f"{p}SETTINGS_PAGE", False):
+        raise ConfigError(f"{p}SETTINGS_PAGE needs {p}TRANSPORT=http")
     return Settings(
         transport="http" if transport == "http" else "stdio",
         server_name=server_name,
@@ -252,6 +256,11 @@ def _load_http_settings(env: Mapping[str, str]) -> HttpSettings:
             "of the e-mail addresses and/or OIDC subject IDs allowed to sign in"
         )
 
+    settings_page = _bool(env, f"{p}SETTINGS_PAGE", False)
+    if settings_page and not base_url.startswith("https://"):
+        # Its cookies are __Host- (Secure): a browser drops them over plain http.
+        raise ConfigError(f"{p}SETTINGS_PAGE needs an https {p}BASE_URL")
+
     redirect_uris = _split_list(_get(env, f"{p}ALLOWED_REDIRECT_URIS")) or list(
         DEFAULT_REDIRECT_URIS
     )
@@ -270,6 +279,7 @@ def _load_http_settings(env: Mapping[str, str]) -> HttpSettings:
         verify_id_token=_bool(env, f"{p}OIDC_VERIFY_ID_TOKEN", False),
         trust_forwarded=_bool(env, f"{p}TRUST_FORWARDED_HEADERS", False),
         forwarded_allow_ips=_get(env, f"{p}FORWARDED_ALLOW_IPS") or "127.0.0.1",
+        settings_page=settings_page,
     )
 
 

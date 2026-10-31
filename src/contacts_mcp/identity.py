@@ -30,6 +30,11 @@ def current_user() -> str:
     claims = upstream_claims()
     if not claims:
         return LOCAL_USER
+    return user_label(claims)
+
+
+def user_label(claims: dict[str, Any]) -> str:
+    """The verified e-mail, else the subject, in identity ``claims``."""
     email = claims.get("email")
     if isinstance(email, str) and claims.get("email_verified") is True:
         return email.lower()

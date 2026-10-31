@@ -180,7 +180,26 @@ def test_http_settings() -> None:
     assert http.extra_authorize_params == {}
     assert http.verify_id_token is False
     assert http.trust_forwarded is False
+    assert http.settings_page is False
     assert http.oidc_client_secret.get_secret_value() == "csecret"
+
+
+def test_settings_page_flag() -> None:
+    s = load_settings({**HTTP_ENV, "CONTACTS_MCP_SETTINGS_PAGE": "true"})
+    assert s.http is not None
+    assert s.http.settings_page is True
+
+
+def test_settings_page_needs_https() -> None:
+    env = {**HTTP_ENV, "CONTACTS_MCP_SETTINGS_PAGE": "true"}
+    env["CONTACTS_MCP_BASE_URL"] = "http://contacts.example.com"
+    with pytest.raises(ConfigError, match="needs an https CONTACTS_MCP_BASE_URL"):
+        load_settings(env)
+
+
+def test_settings_page_needs_http() -> None:
+    with pytest.raises(ConfigError, match="CONTACTS_MCP_SETTINGS_PAGE needs"):
+        load_settings({"CONTACTS_MCP_SETTINGS_PAGE": "true"})
 
 
 @pytest.mark.parametrize(
