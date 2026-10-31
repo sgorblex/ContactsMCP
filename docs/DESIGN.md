@@ -22,6 +22,7 @@ configuration are in the [README](../README.md).
 | `normalize.py` | People API JSON → `ContactSummary` / `Contact` / `OtherContact` / `Group` (read direction); values from the person's Google profile listed as `from_profile` |
 | `accounts.py` | `AccountFileStore`: one JSON file per alias, written atomically, 0600 in a 0700 directory |
 | `registry.py` | `AccountRegistry` / `Account`: routing by alias, per-account mutation lock, search warm-up, group-name cache, `reload()` |
+| `linking.py` | The Google side of linking: PKCE, consent URL, code exchange and grant checks, revoke; used by the auth CLI |
 | `auth_cli.py` | `auth add / list / remove / set-read-only` |
 | `tools/_common.py` | Tool annotations, shared description notes, `write_attempt()` (account check, lock, audit) |
 | `tools/read.py` | `accounts`, `search_contacts`, `list_contacts`, `get_contact` |
