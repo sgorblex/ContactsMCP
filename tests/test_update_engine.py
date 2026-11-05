@@ -10,6 +10,7 @@ import pytest
 from contacts_mcp.errors import InvalidArgumentError
 from contacts_mcp.models import (
     Address,
+    CustomFieldOps,
     Email,
     Event,
     ListOps,
@@ -25,6 +26,7 @@ from contacts_mcp.update_engine import (
     ContactFields,
     ContactOps,
     build_person,
+    check_ops,
     plan_update,
 )
 from tests.conftest import person
@@ -42,6 +44,10 @@ def ada(**extra: Any) -> dict[str, Any]:
         phones=["+39 333 123 4567", "02 1234 5678"],
         **extra,
     )
+
+
+def setting(key: str = "last_reviewed", value: str = "2026-11-06") -> ContactOps:
+    return ContactOps(user_defined=CustomFieldOps(set=[UserDefined(key=key, value=value)]))
 
 
 # --- emails / generic list ops ---------------------------------------------------------
@@ -290,6 +296,108 @@ def test_organizations_match_by_name() -> None:
     assert plan_update(p, ops).fields["organizations"][1] == {"name": "ACME", "title": "CTO"}
 
 
+def test_set_adds_a_new_key_and_keeps_the_others() -> None:
+    p = person(userDefined=[item(False, key="other", value="keep")])
+    plan = plan_update(p, setting())
+    assert plan.fields["userDefined"] == [
+        p["userDefined"][0],
+        {"key": "last_reviewed", "value": "2026-11-06"},
+    ]
+
+
+def test_set_replaces_the_value_and_keeps_place_metadata_and_spelling() -> None:
+    p = person(
+        userDefined=[
+            item(False, key="Last_Reviewed", value="2020-01-01"),
+            item(False, key="other", value="keep"),
+        ]
+    )
+    plan = plan_update(p, setting())
+    assert plan.fields["userDefined"] == [
+        {**p["userDefined"][0], "value": "2026-11-06"},
+        p["userDefined"][1],
+    ]
+    assert plan.changes[0].field == "user_defined"
+
+
+def test_set_collapses_a_repeated_key() -> None:
+    p = person(
+        userDefined=[
+            item(False, key="last_reviewed", value="2020-01-01"),
+            item(False, key="other", value="keep"),
+            item(False, key="last_reviewed", value="2021-01-01"),
+        ]
+    )
+    plan = plan_update(p, setting())
+    assert [(i["key"], i["value"]) for i in plan.fields["userDefined"]] == [
+        ("last_reviewed", "2026-11-06"),
+        ("other", "keep"),
+    ]
+
+
+def test_set_of_the_current_value_writes_nothing() -> None:
+    p = person(userDefined=[item(False, key="last_reviewed", value="2026-11-06")])
+    assert plan_update(p, setting()).update_fields == []
+
+
+def test_set_still_removes_a_duplicate_of_the_current_value() -> None:
+    p = person(
+        userDefined=[
+            item(False, key="last_reviewed", value="2026-11-06"),
+            item(False, key="last_reviewed", value="2026-11-06"),
+        ]
+    )
+    assert len(plan_update(p, setting()).fields["userDefined"]) == 1
+
+
+def test_set_works_alongside_add_and_remove_of_other_keys() -> None:
+    p = person(userDefined=[item(False, key="gone", value="x")])
+    ops = ContactOps(
+        user_defined=CustomFieldOps(
+            remove=["gone"],
+            add=[UserDefined(key="new", value="1")],
+            set=[UserDefined(key="last_reviewed", value="2026-11-06")],
+        )
+    )
+    assert [i["key"] for i in plan_update(p, ops).fields["userDefined"]] == [
+        "new",
+        "last_reviewed",
+    ]
+
+
+def test_set_leaves_a_profile_value_and_adds_the_contacts_own() -> None:
+    profile = {"metadata": {"source": PROFILE}, "key": "last_reviewed", "value": "2020-01-01"}
+    p = person(userDefined=[profile])
+    plan = plan_update(p, setting())
+    assert plan.fields["userDefined"] == [
+        profile,
+        {"key": "last_reviewed", "value": "2026-11-06"},
+    ]
+
+
+def test_set_refuses_a_blank_key() -> None:
+    with pytest.raises(InvalidArgumentError, match="not blank"):
+        plan_update(person(), setting(key="   "))
+
+
+@pytest.mark.parametrize(
+    "ops",
+    [
+        CustomFieldOps(
+            set=[UserDefined(key="a", value="1"), UserDefined(key=" A ", value="2")],
+        ),
+        CustomFieldOps(
+            add=[UserDefined(key="a", value="1")],
+            set=[UserDefined(key="A", value="2")],
+        ),
+        CustomFieldOps(remove=["a"], set=[UserDefined(key="A", value="2")]),
+    ],
+)
+def test_set_refuses_a_repeated_or_conflicting_key(ops: CustomFieldOps) -> None:
+    with pytest.raises(InvalidArgumentError, match="set takes each key once"):
+        check_ops(ContactOps(user_defined=ops))
+
+
 def test_urls_relations_user_defined() -> None:
     p = person(
         urls=[item(True, value="https://ada.dev")],
@@ -299,7 +407,7 @@ def test_urls_relations_user_defined() -> None:
     ops = ContactOps(
         urls=ListOps(add=[Url(value="https://blog.ada.dev", type="blog")]),
         relations=ListOps(remove=["byron"]),
-        user_defined=ListOps(remove=["LOCKER"], add=[UserDefined(key="Locker", value="43")]),
+        user_defined=CustomFieldOps(remove=["LOCKER"], add=[UserDefined(key="Locker", value="43")]),
     )
     plan = plan_update(p, ops)
     assert plan.update_fields == ["urls", "relations", "userDefined"]

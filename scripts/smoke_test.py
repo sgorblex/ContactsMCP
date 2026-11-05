@@ -135,6 +135,18 @@ async def run_checks(
     check(digits(SECOND_PHONE) in numbers, "second phone added")
     check(len(numbers) == 2, "exactly two phones")
 
+    step("update_contact: set a custom field twice, one value remains")
+    for value in ("first", "second"):
+        await call(
+            client,
+            "update_contact",
+            resource_name=resource_name,
+            account=account,
+            user_defined={"set": [{"key": "smoke", "value": value}]},
+        )
+    after = await call(client, "get_contact", resource_name=resource_name, account=account)
+    check(after.get("user_defined") == [{"key": "smoke", "value": "second"}], "value replaced")
+
     step("create_group + add_to_group")
     group = await call(client, "create_group", account=account, name=f"smoke-{token}")
     group_name = str(group["resource_name"])

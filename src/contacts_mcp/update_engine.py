@@ -6,7 +6,8 @@ result, and retry on an etag conflict by planning again on the fresh person.
 
 Existing items are kept **verbatim** (their ``metadata``, ``formattedType`` and any
 sub-field this server does not know), except that an ``add`` of a value already there with
-another type changes that item's type; only new items are built from the tool models.
+another type changes that item's type, and a ``set`` changes the value of the custom field
+it names; only new items are built from the tool models.
 Values from the person's own Google profile are never edited: Google ignores them.
 """
 
@@ -24,6 +25,7 @@ from contacts_mcp.fields import WRITABLE_FIELDS
 from contacts_mcp.models import (
     Address,
     ClearableField,
+    CustomFieldOps,
     Email,
     Event,
     FieldChange,
@@ -109,7 +111,7 @@ class ContactOps(Model):
     urls: ListOps[Url] | None = None
     relations: ListOps[Relation] | None = None
     events: ListOps[Event] | None = None
-    user_defined: ListOps[UserDefined] | None = None
+    user_defined: CustomFieldOps | None = None
     birthday: PartialDate | None = Field(default=None, description="Replaces the birthday.")
     biography: str | None = Field(default=None, description="Replaces the notes ('' clears).")
     clear: list[ClearableField] = Field(
@@ -297,7 +299,7 @@ class ListField:
     to_api: Callable[[Any], JSON]
     from_api: Callable[[JSON], Any]  # → model, str, or None (unreadable item)
     keys: Callable[[JSON], set[str]]  # normalized match keys of a raw item
-    query: Callable[[str], str]  # normalizes a `remove` / `set_primary` value
+    query: Callable[[str], str]  # normalizes a `remove` / `set_primary` value or a `set` key
     label: Callable[[JSON], str]  # how an item is shown in an error
     # `add` doesn't duplicate a value the contact already has (it may retype it).
     dedupe_by_key: bool = False
@@ -566,6 +568,24 @@ def apply_list_ops(
     return new
 
 
+def set_by_key(items: list[JSON], ops: CustomFieldOps) -> list[JSON]:
+    """``items`` with each key of ``ops.set`` holding the given value: the key's first own
+    item takes it and keeps its place, metadata and spelling, later items with that key
+    go, and a new key is appended. ``items`` already holds the result of add and remove."""
+    spec = LIST_FIELD_BY_ARG["user_defined"]
+    new = list(items)
+    for pair in ops.set:
+        query = spec.query(pair.key)
+        matched = [i for i in new if is_contact_data(i) and query in spec.keys(i)]
+        if not matched:
+            new.append(spec.to_api(pair))
+            continue
+        first, *extra = matched
+        kept = first if first.get("value") == pair.value else {**first, "value": pair.value}
+        new = [kept if i is first else i for i in new if not any(i is e for e in extra)]
+    return new
+
+
 def _edit_target(items: list[JSON]) -> tuple[int | None, JSON]:
     """The item a single-valued field's change edits: ``(index, copy)`` of the contact
     source's item (the primary one first). Google ignores non-contact data (e.g. a
@@ -703,8 +723,27 @@ class UpdatePlan:
         return out
 
 
+def _check_custom_field_set(ops: CustomFieldOps) -> None:
+    query = LIST_FIELD_BY_ARG["user_defined"].query
+    keys = [query(pair.key) for pair in ops.set]
+    if not all(keys):
+        raise InvalidArgumentError("user_defined: set needs a key that is not blank.")
+    others = {query(key) for key in ops.remove} | {query(m.key) for m in ops.add}
+    conflicting = {
+        clean(pair.key)
+        for pair, key in zip(ops.set, keys, strict=True)
+        if keys.count(key) > 1 or key in others
+    }
+    if conflicting:
+        raise InvalidArgumentError(
+            "user_defined: set takes each key once, not also in add or remove: "
+            + ", ".join(f"'{key}'" for key in sorted(conflicting))
+            + "."
+        )
+
+
 def check_ops(ops: ContactOps) -> None:
-    """Checks that need no person: something to do, no clear/set conflict."""
+    """Checks that need no person: something to do, no clear/set conflict, a usable `set`."""
     given = [f for f in ContactOps.model_fields if f != "clear" and getattr(ops, f) is not None]
     if not given and not ops.clear:
         raise InvalidArgumentError("Nothing to update: give at least one field to change.")
@@ -713,6 +752,8 @@ def check_ops(ops: ContactOps) -> None:
         raise InvalidArgumentError(
             "Both set and cleared: " + ", ".join(sorted(set(conflicts))) + ". Do one or the other."
         )
+    if ops.user_defined is not None:
+        _check_custom_field_set(ops.user_defined)
 
 
 def plan_update(person: JSON, ops: ContactOps) -> UpdatePlan:
@@ -728,6 +769,8 @@ def plan_update(person: JSON, ops: ContactOps) -> UpdatePlan:
         list_ops = getattr(ops, spec.arg)
         if list_ops is not None:
             new[spec.api] = apply_list_ops(spec, _items(person, spec.api), list_ops, errors)
+    if ops.user_defined is not None and ops.user_defined.set:
+        new["userDefined"] = set_by_key(new["userDefined"], ops.user_defined)
     if ops.birthday is not None:
         new["birthdays"] = replace_birthday(_items(person, "birthdays"), ops.birthday)
     if ops.biography is not None:

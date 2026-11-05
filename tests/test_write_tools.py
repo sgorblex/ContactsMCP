@@ -547,6 +547,55 @@ async def test_batch_update_union_mask(google: respx.MockRouter, client: Client[
     assert result.structured_content["failures"] == []
 
 
+async def test_update_contact_takes_set(google: respx.MockRouter, client: Client[Any]) -> None:
+    current = person(etag="e1")
+    current["userDefined"] = [{"key": "last_reviewed", "value": "2020-01-01"}]
+    google.get(f"{PEOPLE}/people/c1").respond(200, json=current)
+    route = google.patch(f"{PEOPLE}/people/c1:updateContact").respond(200, json=current)
+    pair = {"key": "last_reviewed", "value": "2026-11-06"}
+    async with client:
+        await client.call_tool(
+            "update_contact", {"resource_name": "people/c1", "user_defined": {"set": [pair]}}
+        )
+    assert body_of(route.calls.last.request)["userDefined"] == [pair]
+
+
+async def test_batch_set_needs_no_knowledge_of_which_contacts_have_the_key(
+    google: respx.MockRouter, client: Client[Any]
+) -> None:
+    p1 = person("people/c1", etag="e1")
+    p1["userDefined"] = [{"key": "last_reviewed", "value": "2020-01-01"}]
+    p2 = person("people/c2", etag="e2")
+    google.get(f"{PEOPLE}/people:batchGet").respond(
+        200, json={"responses": [{"person": p} for p in (p1, p2)]}
+    )
+    route = google.post(f"{PEOPLE}/people:batchUpdateContacts").respond(
+        200,
+        json={
+            "updateResult": {
+                rn: {"person": person(rn, etag="new")} for rn in ("people/c1", "people/c2")
+            }
+        },
+    )
+    pair = {"key": "last_reviewed", "value": "2026-11-06"}
+    async with client:
+        result = await client.call_tool(
+            "batch_update_contacts",
+            {
+                "updates": [
+                    {"resource_name": rn, "user_defined": {"set": [pair]}}
+                    for rn in ("people/c1", "people/c2")
+                ]
+            },
+        )
+    assert result.structured_content is not None
+    assert result.structured_content["failures"] == []
+    sent = body_of(route.calls.last.request)
+    assert sent["updateMask"] == "userDefined"
+    assert sent["contacts"]["people/c1"]["userDefined"] == [pair]
+    assert sent["contacts"]["people/c2"]["userDefined"] == [pair]
+
+
 async def test_batch_update_reports_the_contacts_google_refused(
     google: respx.MockRouter, client: Client[Any]
 ) -> None:

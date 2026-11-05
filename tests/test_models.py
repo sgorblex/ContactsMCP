@@ -5,7 +5,14 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from contacts_mcp.models import Email, ListOps, PartialDate, check_resource_name
+from contacts_mcp.models import (
+    CustomFieldOps,
+    Email,
+    ListOps,
+    PartialDate,
+    UserDefined,
+    check_resource_name,
+)
 
 
 @pytest.mark.parametrize(
@@ -62,3 +69,24 @@ def test_resource_names_are_accepted(value: str, prefix: str) -> None:
 def test_bad_resource_names_are_refused(value: str, prefix: str) -> None:
     with pytest.raises(ValueError, match="resource name"):
         check_resource_name(value, prefix)
+
+
+def test_custom_field_ops_accept_set_alone() -> None:
+    ops = CustomFieldOps(set=[UserDefined(key="a", value="1")])
+    assert ops.set[0].key == "a"
+
+
+def test_empty_custom_field_ops_name_set() -> None:
+    with pytest.raises(ValidationError, match="replace_all, set, set_primary"):
+        CustomFieldOps()
+
+
+@pytest.mark.parametrize("other", [{"replace_all": []}, {"set_primary": "a"}])
+def test_set_goes_without_replace_all_and_set_primary(other: dict[str, object]) -> None:
+    with pytest.raises(ValidationError, match="set goes without"):
+        CustomFieldOps.model_validate({"set": [{"key": "a", "value": "1"}], **other})
+
+
+def test_other_fields_do_not_take_set() -> None:
+    with pytest.raises(ValidationError):
+        ListOps[str].model_validate({"set": ["a"]})
