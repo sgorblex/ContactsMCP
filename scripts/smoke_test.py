@@ -119,7 +119,25 @@ async def run_checks(
     step("get_contact")
     fetched = await call(client, "get_contact", resource_name=resource_name, account=account)
     check(fetched.get("etag") is not None, "etag present")
+    check(fetched.get("updated_at") is not None, "updated_at present")
     check(digits(FIRST_PHONE) in phone_digits(fetched), "first phone stored")
+
+    step("list_contacts: the wider mask is accepted, the contact has its details")
+    listed = await call(
+        client,
+        "list_contacts",
+        account=account,
+        page_size=1000,
+        sort="last_modified_descending",
+    )
+    entry = next(
+        (c for c in listed.get("contacts", []) if c.get("resource_name") == resource_name), None
+    )
+    if entry is None:
+        print("    WARNING: not in the first page, details not checked")
+    else:
+        check(entry.get("updated_at") is not None, "updated_at listed")
+        check(entry.get("field_count") == 2, "field_count counts the e-mail and the phone")
 
     step("update_contact: add a second phone, keep the first")
     await call(

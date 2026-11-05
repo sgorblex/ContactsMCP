@@ -1,10 +1,12 @@
 """People API JSON → tool models (read direction). Every string goes through
 :func:`contacts_mcp.sanitize.clean`; ``metadata`` is dropped, except that values from the
-person's Google profile (not the contact itself) are listed as ``from_profile``."""
+person's Google profile (not the contact itself) are listed as ``from_profile``, and the
+contact source's ``updateTime`` is shown as ``updated_at``."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from contacts_mcp.models import (
@@ -206,9 +208,73 @@ def _summary_org(person: JSON) -> str | None:
     return ", ".join(parts) or None
 
 
+def time_from_api(value: str) -> datetime | None:
+    """A Google RFC 3339 timestamp, always timezone-aware, or None if it isn't one."""
+    try:
+        when = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=UTC)
+
+
+def update_time(person: JSON) -> str | None:
+    """When the contact itself last changed: the latest ``updateTime`` among its ``CONTACT``
+    sources (the person's Google profile, also a source, changes on its own)."""
+    meta = person.get("metadata")
+    sources = meta.get("sources") if isinstance(meta, dict) else None
+    if not isinstance(sources, list):
+        return None
+    latest: tuple[datetime, str] | None = None
+    for source in sources:
+        if not isinstance(source, dict) or source.get("type") != "CONTACT":
+            continue
+        value = _s(source.get("updateTime"))
+        when = time_from_api(value) if value else None
+        if value and when and (latest is None or when > latest[0]):
+            latest = (when, value)
+    return latest[1] if latest else None
+
+
+#: Fields where each item is one value.
+_COUNTED_LISTS = (
+    "nicknames",
+    "emailAddresses",
+    "phoneNumbers",
+    "organizations",
+    "addresses",
+    "urls",
+    "relations",
+    "events",
+    "userDefined",
+)
+
+
+def _own_items(person: JSON, field: str) -> list[JSON]:
+    return [item for item in _items(person, field) if is_contact_data(item)]
+
+
+def has_notes(person: JSON) -> bool:
+    """Whether the contact has notes of its own: a bio from the person's Google profile is
+    what they say about themselves, not a note about them."""
+    return any(_s(item.get("value")) for item in _own_items(person, "biographies"))
+
+
+def field_count(person: JSON) -> int:
+    """How many values the contact itself holds besides the name, groups and photo: not
+    those from the person's Google profile. Notes and the birthday are one value each."""
+    values = sum(len(_own_items(person, field)) for field in _COUNTED_LISTS)
+    return values + has_notes(person) + bool(_own_items(person, "birthdays"))
+
+
 def person_to_summary(
-    person: JSON, *, group_names: dict[str, str], account: str | None = None
+    person: JSON,
+    *,
+    group_names: dict[str, str],
+    account: str | None = None,
+    details: bool = False,
 ) -> ContactSummary:
+    """``details`` fills the fields that need ``LISTING_FIELDS``: without it they stay None
+    rather than claim, say, that a contact fetched without its notes has none."""
     email = _primary(_items(person, "emailAddresses"))
     phone = _primary(_items(person, "phoneNumbers"))
     return ContactSummary(
@@ -222,6 +288,9 @@ def person_to_summary(
         groups=[
             _group_name(rn, group_names) for rn in group_resource_names(person) if rn != MY_CONTACTS
         ],
+        updated_at=update_time(person) if details else None,
+        has_notes=has_notes(person) if details else None,
+        field_count=field_count(person) if details else None,
     )
 
 
@@ -251,6 +320,7 @@ def person_to_contact(
         resource_name=_id(person.get("resourceName")),
         etag=_id(person.get("etag")) or None,
         account=account,
+        updated_at=update_time(person),
         name=name_from_api(name) if name else None,
         nicknames=[
             n for n in (_s(i.get("value")) for i in primary_first(_items(person, "nicknames"))) if n

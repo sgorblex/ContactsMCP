@@ -11,7 +11,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from contacts_mcp.errors import ContactsError, InvalidArgumentError
-from contacts_mcp.fields import PERSON_FIELDS, SUMMARY_FIELDS
+from contacts_mcp.fields import LISTING_FIELDS, READ_FIELDS, SUMMARY_FIELDS
 from contacts_mcp.models import (
     AccountArg,
     AccountFailure,
@@ -136,7 +136,8 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
 
     @mcp.tool(
         description=(
-            "List contacts page by page as compact summaries. Pass the returned "
+            "List contacts page by page as compact summaries, which here also have "
+            "`updated_at`, `has_notes` and `field_count`. Pass the returned "
             "`next_page_token` as `page_token` to get the next page (absent on the last "
             "page), with the same `sort`. `total_items` is Google's count of the whole list. "
             f"{UNTRUSTED_NOTE}"
@@ -167,13 +168,14 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
             page_size=page_size,
             page_token=page_token,
             sort_order=SORT_ORDERS[sort] if sort else None,
+            person_fields=LISTING_FIELDS,
         )
         groups = await acct.group_names(best_effort=True)
         total = body.get("totalItems")
         token = body.get("nextPageToken")
         return ContactList(
             contacts=[
-                person_to_summary(p, group_names=groups, account=acct.alias)
+                person_to_summary(p, group_names=groups, account=acct.alias, details=True)
                 for p in body.get("connections", [])
                 if isinstance(p, dict)
             ],
@@ -185,8 +187,8 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
         description=(
             "Get one contact in full: every supported field (names, e-mails, phones, "
             "organizations, addresses, birthday, notes, URLs, relations, events, custom "
-            "fields, groups, photo URL) and its `etag`. `raw` adds Google's own person "
-            f"object. {UNTRUSTED_NOTE}"
+            "fields, groups, photo URL), its `etag` and `updated_at`. `raw` adds Google's own "
+            f"person object. {UNTRUSTED_NOTE}"
         ),
         annotations=READ,
     )
@@ -198,6 +200,6 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
         ] = False,
     ) -> Contact:
         acct = registry.resolve(account)
-        person = await acct.people.get_person(resource_name, PERSON_FIELDS)
+        person = await acct.people.get_person(resource_name, READ_FIELDS)
         groups = await acct.group_names(best_effort=True)
         return person_to_contact(person, group_names=groups, account=acct.alias, raw=raw)

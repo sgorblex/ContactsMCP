@@ -364,6 +364,9 @@ async def test_delete_contact_returns_summary(
             "phone": None,
             "organization": None,
             "groups": [],
+            "updated_at": None,
+            "has_notes": None,
+            "field_count": None,
         }
     }
 

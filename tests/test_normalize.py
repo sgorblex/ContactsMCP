@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from contacts_mcp.models import PartialDate
 from contacts_mcp.normalize import (
     group_to_model,
     other_to_model,
     person_to_contact,
     person_to_summary,
+    update_time,
 )
 from tests.conftest import person
 
@@ -43,6 +46,9 @@ def test_summary_of_a_typical_contact() -> None:
         "phone": "+39 333 1234567",
         "organization": "Programmer, Analytical Engines",
         "groups": ["Family"],
+        "updated_at": None,
+        "has_notes": None,
+        "field_count": None,
     }
 
 
@@ -347,3 +353,102 @@ def test_group_to_model() -> None:
         }
     )
     assert (system.name, system.type, system.member_count) == ("My Contacts", "system", None)
+
+
+SOURCE_TIME = "2024-05-06T07:08:09.123456789Z"
+
+
+def timed(*sources: dict[str, Any]) -> dict[str, Any]:
+    return person(metadata={"sources": list(sources), "objectType": "PERSON"})
+
+
+def test_update_time_is_that_of_the_contact_source_not_the_profile() -> None:
+    p = timed(
+        {"type": "PROFILE", "updateTime": "2025-01-01T00:00:00Z"},
+        {"type": "CONTACT", "updateTime": SOURCE_TIME},
+    )
+    assert update_time(p) == SOURCE_TIME
+
+
+def test_update_time_takes_the_latest_contact_source() -> None:
+    p = timed(
+        {"type": "CONTACT", "updateTime": "2024-01-01T00:00:00Z"},
+        {"type": "CONTACT", "updateTime": "2024-01-01T00:00:00.5Z"},
+    )
+    assert update_time(p) == "2024-01-01T00:00:00.5Z"
+
+
+@pytest.mark.parametrize(
+    "p",
+    [
+        person(metadata="nope"),
+        person(metadata={"sources": "nope"}),
+        timed({"type": "CONTACT"}),
+        timed({"type": "CONTACT", "updateTime": "not a time"}),
+        timed({"type": "PROFILE", "updateTime": "2025-01-01T00:00:00Z"}),
+    ],
+)
+def test_update_time_is_none_when_unknown(p: dict[str, Any]) -> None:
+    assert update_time(p) is None
+
+
+def test_update_time_compares_a_timestamp_without_an_offset() -> None:
+    p = timed(
+        {"type": "CONTACT", "updateTime": "2024-01-01T00:00:00"},
+        {"type": "CONTACT", "updateTime": "2024-01-02T00:00:00Z"},
+    )
+    assert update_time(p) == "2024-01-02T00:00:00Z"
+
+
+def test_contact_has_updated_at() -> None:
+    p = timed({"type": "CONTACT", "updateTime": SOURCE_TIME})
+    assert person_to_contact(p, group_names={}).updated_at == SOURCE_TIME
+
+
+def test_summary_details_appear_only_when_asked_for() -> None:
+    p = timed({"type": "CONTACT", "updateTime": SOURCE_TIME})
+    p["biographies"] = [{"value": "Notes"}]
+    plain = person_to_summary(p, group_names={})
+    assert (plain.updated_at, plain.has_notes, plain.field_count) == (None, None, None)
+    full = person_to_summary(p, group_names={}, details=True)
+    assert (full.updated_at, full.has_notes, full.field_count) == (SOURCE_TIME, True, 1)
+
+
+def test_blank_notes_are_no_notes() -> None:
+    summary = person_to_summary(person(biographies=[{"value": "  "}]), group_names={}, details=True)
+    assert summary.has_notes is False
+    assert summary.field_count == 0
+
+
+def test_field_count_counts_values_and_shows_one_birthday() -> None:
+    p = person(
+        emails=["a@x.io", "b@x.io"],
+        phones=["1"],
+        userDefined=[{"key": "k", "value": "v"}],
+        birthdays=[{"date": {"month": 1}}, {"date": {"month": 1}}],
+    )
+    assert person_to_summary(p, group_names={}, details=True).field_count == 5
+
+
+def test_a_profile_bio_is_not_notes() -> None:
+    profile = {"metadata": {"source": {"type": "PROFILE"}}}
+    p = person(biographies=[{"value": "About me", **profile}])
+    summary = person_to_summary(p, group_names={}, details=True)
+    assert summary.has_notes is False
+    assert summary.field_count == 0
+    assert person_to_contact(p, group_names={}).from_profile == ["biography: About me"]
+
+
+def test_field_count_ignores_profile_values() -> None:
+    profile = {"metadata": {"source": {"type": "PROFILE"}}}
+    p = person(
+        emails=["a@x.io"],
+        urls=[{"value": "https://x.io", **profile}],
+        birthdays=[{"date": {"month": 1}, **profile}],
+    )
+    assert person_to_summary(p, group_names={}, details=True).field_count == 1
+
+
+def test_field_count_ignores_name_groups_and_photo() -> None:
+    p = person(photos=[{"url": "https://x.io/p"}])
+    assert person_to_summary(p, group_names={}, details=True).field_count == 0
