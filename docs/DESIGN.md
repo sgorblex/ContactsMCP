@@ -92,9 +92,10 @@ everything at the HTTP layer with `respx`.
 
 ## Tools
 
-Every tool except `accounts` takes `account`. `search_contacts` also accepts `"*"`: every linked
-account is searched concurrently, results are tagged with their alias, and per-account failures
-(unusable accounts included) are reported in `failures` instead of failing the call.
+Every tool except `accounts` takes `account`, and contact records carry their alias.
+`search_contacts` also accepts `"*"`: every linked account is searched concurrently, and
+per-account failures (unusable accounts included) are reported in `failures` instead of failing
+the call.
 
 List and search tools return compact summaries (resource name, display name, primary e-mail and
 phone, organization, groups); `get_contact` returns the full normalized record with its `etag`.

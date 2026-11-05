@@ -25,7 +25,7 @@ Contents: [1. What it does](#1-what-it-does) · [2. Google Cloud setup](#2-googl
 
 Every tool except `accounts` takes an `account` (the alias you chose when linking). It may be omitted only when
 exactly one account is linked. `search_contacts` also accepts `"*"` to search every account at
-once; results are tagged with their alias.
+once. Contact records carry their account's alias.
 
 | Tool | Kind | What it does |
 | --- | --- | --- |

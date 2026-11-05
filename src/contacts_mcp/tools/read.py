@@ -45,10 +45,8 @@ ALL_ACCOUNTS = "*"
 SEARCH_MAX = 30
 
 
-async def _search_one(
-    account: Account, query: str, limit: int, *, tag: bool
-) -> list[ContactSummary]:
-    """Search one account (warming it up first); tag results with its alias if ``tag``."""
+async def _search_one(account: Account, query: str, limit: int) -> list[ContactSummary]:
+    """Search one account (warming it up first)."""
     api = account.people  # raises for an unreadable or needs-relink account
     await account.ensure_warm("contacts")
     body = await api.search_contacts(query, page_size=limit, read_mask=SUMMARY_FIELDS)
@@ -57,11 +55,7 @@ async def _search_one(
     for result in body.get("results", []):
         person = result.get("person") if isinstance(result, dict) else None
         if isinstance(person, dict):
-            out.append(
-                person_to_summary(
-                    person, group_names=groups, account=account.alias if tag else None
-                )
-            )
+            out.append(person_to_summary(person, group_names=groups, account=account.alias))
     return out
 
 
@@ -88,9 +82,9 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
             "Search contacts by name, e-mail, phone number or organization (prefix match on "
             "words). Returns compact summaries (resource name, display name, primary e-mail "
             "and phone, organization, group names); use `get_contact` for everything else. "
-            'Pass `account` "*" to search every linked account at once: each result is then '
-            "tagged with its `account` alias, and accounts that could not be searched are "
-            "listed in `failures` instead of failing the call. "
+            'Pass `account` "*" to search every linked account at once: accounts that could '
+            "not be searched are listed in `failures` instead of failing the call. Each "
+            "result carries its `account` alias. "
             f"{SEARCH_LAG_NOTE} {UNTRUSTED_NOTE}"
         ),
         annotations=READ,
@@ -114,7 +108,7 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
             raise InvalidArgumentError("`query` must not be blank.")
         if account != ALL_ACCOUNTS:
             single = registry.resolve(account)
-            return SearchResult(contacts=await _search_one(single, query, limit, tag=False))
+            return SearchResult(contacts=await _search_one(single, query, limit))
 
         targets = registry.all()
         if not targets:
@@ -122,7 +116,7 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
 
         async def run(target: Account) -> list[ContactSummary] | AccountFailure:
             try:
-                return await _search_one(target, query, limit, tag=True)
+                return await _search_one(target, query, limit)
             except ContactsError as e:
                 return AccountFailure(account=target.alias, error=str(e))
             except Exception:
@@ -160,7 +154,12 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
                 "last_modified_descending", "last_modified_ascending", "first_name", "last_name"
             ]
             | None,
-            Field(description="Sort order. Google's default (last updated first) when omitted."),
+            Field(
+                description=(
+                    "Sort order. Google's default (oldest change first) when omitted. The "
+                    "order can lag recent writes by a few minutes."
+                )
+            ),
         ] = None,
     ) -> ContactList:
         acct = registry.resolve(account)
@@ -174,7 +173,7 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
         token = body.get("nextPageToken")
         return ContactList(
             contacts=[
-                person_to_summary(p, group_names=groups)
+                person_to_summary(p, group_names=groups, account=acct.alias)
                 for p in body.get("connections", [])
                 if isinstance(p, dict)
             ],
@@ -201,4 +200,4 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
         acct = registry.resolve(account)
         person = await acct.people.get_person(resource_name, PERSON_FIELDS)
         groups = await acct.group_names(best_effort=True)
-        return person_to_contact(person, group_names=groups, raw=raw)
+        return person_to_contact(person, group_names=groups, account=acct.alias, raw=raw)

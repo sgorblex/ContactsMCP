@@ -90,7 +90,7 @@ async def test_list_other_contacts_pagination_round_trip(
     assert first["next_page_token"] == "next-1"
     assert first["other_contacts"][0] == {
         "resource_name": "otherContacts/c1",
-        "account": None,
+        "account": "work",
         "display_name": "A",
         "emails": ["a@example.com"],
         "phones": ["123"],
@@ -140,6 +140,7 @@ async def test_search_other_contacts_warms_up_once(
         ]
         empty = await call(client, "search_other_contacts", query="eve", account="home")
     assert results[0]["other_contacts"][0]["emails"] == ["eve@x.org"]
+    assert results[0]["other_contacts"][0]["account"] == "work"
     assert empty == {"other_contacts": []}
     searches = requests_to(google, "otherContacts:search")
     warmups = [bearer(r) for r in searches if r.url.params["query"] == ""]

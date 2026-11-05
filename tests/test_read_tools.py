@@ -149,7 +149,7 @@ async def test_search_returns_compact_summaries(
         "contacts": [
             {
                 "resource_name": "people/c1",
-                "account": None,
+                "account": "work",
                 "display_name": "Ada Lovelace",
                 "email": "ada@example.com",
                 "phone": "+39 333 1234567",
@@ -439,6 +439,7 @@ async def test_list_pagination_round_trip(
         assert [c["resource_name"] for c in first["contacts"]] == ["people/c1", "people/c2"]
         assert first["next_page_token"] == "page-2"
         assert first["total_items"] == 3
+        assert first["contacts"][0]["account"] == "work"
         second = await call(client, "list_contacts", page_size=2, page_token="page-2")
     assert [c["resource_name"] for c in second["contacts"]] == ["people/c3"]
     assert second["next_page_token"] is None
@@ -510,6 +511,7 @@ async def test_get_contact_is_full_and_has_the_etag(
     async with make_client(make_registry("work")) as client:
         contact = await call(client, "get_contact", resource_name="people/c1")
     assert contact["etag"] == "etag-42"
+    assert contact["account"] == "work"
     assert contact["name"]["display"] == "Ada Lovelace"
     assert contact["emails"][0]["value"] == "ada@example.com"
     assert contact["biography"] == "Notes"
