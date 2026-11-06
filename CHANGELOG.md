@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0](https://github.com/sgorblex/ContactsMCP/compare/v0.2.0...v0.3.0) (2026-11-06)
+
+
+### Features
+
+* add a set operation for custom fields ([#24](https://github.com/sgorblex/ContactsMCP/issues/24)) ([13a8e91](https://github.com/sgorblex/ContactsMCP/commit/13a8e9151a25fbd9a13628732b77ba6dae0af22e))
+* add find_contacts to filter contacts server-side ([#26](https://github.com/sgorblex/ContactsMCP/issues/26)) ([ad69dbd](https://github.com/sgorblex/ContactsMCP/commit/ad69dbd09cd115b1d96feb73f8e69ff917c26c64))
+* show last change, notes and value count in contact listings ([#25](https://github.com/sgorblex/ContactsMCP/issues/25)) ([deb5280](https://github.com/sgorblex/ContactsMCP/commit/deb5280f2a13bce86b8c731740b98e2c2463cc06))
+
+
+### Bug Fixes
+
+* report the right account and default sort on read tools ([#23](https://github.com/sgorblex/ContactsMCP/issues/23)) ([d0030ab](https://github.com/sgorblex/ContactsMCP/commit/d0030ab2a17d20b059f4ee6249ace5660802218a))
+
 ## [0.2.0](https://github.com/sgorblex/ContactsMCP/compare/v0.1.0...v0.2.0) (2026-10-31)
 
 
