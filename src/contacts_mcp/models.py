@@ -171,7 +171,7 @@ class ContactSummary(Model):
     """The compact form returned by list and search tools."""
 
     resource_name: str
-    account: str | None = Field(default=None, description="Account alias (multi-account search).")
+    account: str | None = Field(default=None, description="Account alias.")
     display_name: str | None = None
     email: str | None = Field(default=None, description="Primary e-mail address.")
     phone: str | None = Field(default=None, description="Primary phone number.")

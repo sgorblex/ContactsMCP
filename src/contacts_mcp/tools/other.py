@@ -49,7 +49,9 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
         token = body.get("nextPageToken")
         return OtherContactList(
             other_contacts=[
-                other_to_model(p) for p in body.get("otherContacts", []) if isinstance(p, dict)
+                other_to_model(p, account=acct.alias)
+                for p in body.get("otherContacts", [])
+                if isinstance(p, dict)
             ],
             next_page_token=token if isinstance(token, str) and token else None,
         )
@@ -77,5 +79,5 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
         for result in body.get("results", []):
             person = result.get("person") if isinstance(result, dict) else None
             if isinstance(person, dict):
-                found.append(other_to_model(person))
+                found.append(other_to_model(person, account=acct.alias))
         return OtherContactSearchResult(other_contacts=found)
