@@ -46,6 +46,7 @@ from contacts_mcp.normalize import (
     date_from_api,
     email_from_api,
     event_from_api,
+    folded,
     is_contact_data,
     is_primary,
     name_from_api,
@@ -218,24 +219,19 @@ def nickname_to_api(nickname: str) -> JSON:
 # --- match keys ------------------------------------------------------------------------
 
 
-def _text(value: Any) -> str:
-    """Trimmed, whitespace-collapsed, case-folded text ('' for a non-string)."""
-    return " ".join(value.split()).casefold() if isinstance(value, str) else ""
-
-
 def _digits(value: Any) -> str:
     return "".join(ch for ch in value if ch.isdigit()) if isinstance(value, str) else ""
 
 
 def _phone_query(value: str) -> str:
     digits = _digits(value)
-    return digits or _text(value)
+    return digits or folded(value)
 
 
 def _phone_keys(item: JSON) -> set[str]:
     keys = {_digits(item.get("value")), _digits(item.get("canonicalForm"))}
     if not any(keys):
-        keys.add(_text(item.get("value")))
+        keys.add(folded(item.get("value")))
     return keys - {""}
 
 
@@ -282,7 +278,7 @@ def _org_text(item: JSON) -> str:
 
 def _keys_of(text_of: Callable[[JSON], Any]) -> Callable[[JSON], set[str]]:
     def keys(item: JSON) -> set[str]:
-        return {_text(text_of(item))} - {""}
+        return {folded(text_of(item))} - {""}
 
     return keys
 
@@ -316,7 +312,7 @@ LIST_FIELDS: tuple[ListField, ...] = (
         nickname_to_api,
         lambda i: clean(i["value"]).strip() or None if isinstance(i.get("value"), str) else None,
         _keys_of(_value),
-        _text,
+        folded,
         lambda i: str(i.get("value", "")),
         dedupe_by_key=True,
     ),
@@ -326,7 +322,7 @@ LIST_FIELDS: tuple[ListField, ...] = (
         email_to_api,
         email_from_api,
         _keys_of(_value),
-        _text,
+        folded,
         lambda i: str(i.get("value", "")),
         dedupe_by_key=True,
     ),
@@ -346,7 +342,7 @@ LIST_FIELDS: tuple[ListField, ...] = (
         organization_to_api,
         organization_from_api,
         _keys_of(_org_text),
-        _text,
+        folded,
         _org_text,
     ),
     ListField(
@@ -355,7 +351,7 @@ LIST_FIELDS: tuple[ListField, ...] = (
         address_to_api,
         address_from_api,
         _keys_of(_address_text),
-        _text,
+        folded,
         lambda i: " ".join(_address_text(i).split()),
     ),
     ListField(
@@ -364,7 +360,7 @@ LIST_FIELDS: tuple[ListField, ...] = (
         url_to_api,
         url_from_api,
         _keys_of(_value),
-        _text,
+        folded,
         lambda i: str(i.get("value", "")),
         dedupe_by_key=True,
     ),
@@ -374,7 +370,7 @@ LIST_FIELDS: tuple[ListField, ...] = (
         relation_to_api,
         relation_from_api,
         _keys_of(lambda i: i.get("person")),
-        _text,
+        folded,
         lambda i: str(i.get("person", "")),
     ),
     ListField(
@@ -392,7 +388,7 @@ LIST_FIELDS: tuple[ListField, ...] = (
         user_defined_to_api,
         user_defined_from_api,
         _keys_of(lambda i: i.get("key")),
-        _text,
+        folded,
         lambda i: str(i.get("key", "")),
     ),
 )

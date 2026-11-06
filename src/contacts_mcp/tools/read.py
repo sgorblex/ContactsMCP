@@ -1,15 +1,18 @@
-"""Read tools: ``accounts``, ``search_contacts``, ``list_contacts``, ``get_contact``."""
+"""Read tools: ``accounts``, ``search_contacts``, ``list_contacts``, ``find_contacts``,
+``get_contact``."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import date
 from typing import Annotated, Literal
 
 from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from contacts_mcp.contact_filter import ContactFilter
 from contacts_mcp.errors import ContactsError, InvalidArgumentError
 from contacts_mcp.fields import LISTING_FIELDS, READ_FIELDS, SUMMARY_FIELDS
 from contacts_mcp.models import (
@@ -19,16 +22,18 @@ from contacts_mcp.models import (
     Contact,
     ContactList,
     ContactSummary,
+    FindResult,
+    MissingField,
     PersonResourceName,
     SearchResult,
 )
-from contacts_mcp.normalize import person_to_contact, person_to_summary
+from contacts_mcp.normalize import folded, person_to_contact, person_to_summary
 from contacts_mcp.registry import Account, AccountRegistry
 from contacts_mcp.tools._common import READ, SEARCH_LAG_NOTE, UNTRUSTED_NOTE
 
 log = logging.getLogger(__name__)
 
-#: ``list_contacts(sort=…)`` → the People API's ``sortOrder``.
+#: The ``sort`` argument → the People API's ``sortOrder``.
 SORT_ORDERS = {
     "last_modified_descending": "LAST_MODIFIED_DESCENDING",
     "last_modified_ascending": "LAST_MODIFIED_ASCENDING",
@@ -44,6 +49,21 @@ READ_LOCAL = ToolAnnotations(
 ALL_ACCOUNTS = "*"
 SEARCH_MAX = 30
 
+LIST_PAGE_MAX = 1000
+#: Google caps an account at 25,000 contacts, so a scan ends well before this.
+MAX_SCAN_PAGES = 30
+
+SortArg = Annotated[
+    Literal["last_modified_descending", "last_modified_ascending", "first_name", "last_name"]
+    | None,
+    Field(
+        description=(
+            "Sort order. Google's default (oldest change first) when omitted. The order can "
+            "lag recent writes by a few minutes."
+        )
+    ),
+]
+
 
 async def _search_one(account: Account, query: str, limit: int) -> list[ContactSummary]:
     """Search one account (warming it up first)."""
@@ -57,6 +77,49 @@ async def _search_one(account: Account, query: str, limit: int) -> list[ContactS
         if isinstance(person, dict):
             out.append(person_to_summary(person, group_names=groups, account=account.alias))
     return out
+
+
+async def _scan(
+    account: Account, criteria: ContactFilter, sort_order: str | None, limit: int
+) -> FindResult:
+    """Walk the contact list until ``limit`` is exceeded or it ends. ``truncated`` is only
+    set once a further match was seen (or the page cap hit), so a list that matches exactly
+    ``limit`` contacts is reported complete."""
+    api = account.people  # raises for an unreadable or needs-relink account
+    groups = await account.group_names(best_effort=True)
+    found: list[ContactSummary] = []
+    scanned = 0
+    total: int | None = None
+    token: str | None = None
+
+    def result(*, truncated: bool) -> FindResult:
+        return FindResult(contacts=found, scanned=scanned, total_items=total, truncated=truncated)
+
+    for _ in range(MAX_SCAN_PAGES):
+        body = await api.list_connections(
+            page_size=LIST_PAGE_MAX,
+            page_token=token,
+            sort_order=sort_order,
+            person_fields=LISTING_FIELDS,
+        )
+        items = body.get("totalItems")
+        total = items if isinstance(items, int) else total
+        for person in body.get("connections", []):
+            if not isinstance(person, dict):
+                continue
+            scanned += 1
+            if not criteria.matches(person):
+                continue
+            if len(found) == limit:
+                return result(truncated=True)
+            found.append(
+                person_to_summary(person, group_names=groups, account=account.alias, details=True)
+            )
+        next_token = body.get("nextPageToken")
+        if not isinstance(next_token, str) or not next_token:
+            return result(truncated=False)
+        token = next_token
+    return result(truncated=True)
 
 
 def register(mcp: FastMCP, registry: AccountRegistry) -> None:
@@ -146,22 +209,13 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
     )
     async def list_contacts(
         account: AccountArg = None,
-        page_size: Annotated[int, Field(ge=1, le=1000, description="Contacts per page.")] = 50,
+        page_size: Annotated[
+            int, Field(ge=1, le=LIST_PAGE_MAX, description="Contacts per page.")
+        ] = 50,
         page_token: Annotated[
             str | None, Field(description="`next_page_token` of the previous page.")
         ] = None,
-        sort: Annotated[
-            Literal[
-                "last_modified_descending", "last_modified_ascending", "first_name", "last_name"
-            ]
-            | None,
-            Field(
-                description=(
-                    "Sort order. Google's default (oldest change first) when omitted. The "
-                    "order can lag recent writes by a few minutes."
-                )
-            ),
-        ] = None,
+        sort: SortArg = None,
     ) -> ContactList:
         acct = registry.resolve(account)
         body = await acct.people.list_connections(
@@ -181,6 +235,69 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
             ],
             next_page_token=token if isinstance(token, str) and token else None,
             total_items=total if isinstance(total, int) else None,
+        )
+
+    @mcp.tool(
+        description=(
+            "Find contacts by what they lack, by a custom field they have, or by when they "
+            "changed, which Google's search cannot do: the server scans the account's contact "
+            "list and returns only the matches, as `list_contacts` summaries. Criteria must all "
+            "hold; give at least one. "
+            "Read `truncated`: when true, more contacts may match. "
+            f"{UNTRUSTED_NOTE}"
+        ),
+        annotations=READ,
+    )
+    async def find_contacts(
+        account: AccountArg = None,
+        missing: Annotated[
+            list[MissingField] | None,
+            Field(
+                description=(
+                    "What the contact must not have. `groups` means no label (starred "
+                    "doesn't count as one). `notes` means no notes of its own (a Google "
+                    "profile bio doesn't count). Other fields count a Google profile value "
+                    "as present."
+                )
+            ),
+        ] = None,
+        custom_fields_missing: Annotated[
+            list[str] | None,
+            Field(description="Custom field keys it must not have (case-insensitive)."),
+        ] = None,
+        custom_fields_present: Annotated[
+            list[str] | None,
+            Field(description="Custom field keys it must have (case-insensitive)."),
+        ] = None,
+        updated_before: Annotated[
+            date | None,
+            Field(
+                description=(
+                    "Last changed before this day (YYYY-MM-DD, UTC). Contacts whose change "
+                    "time Google doesn't report never match."
+                )
+            ),
+        ] = None,
+        sort: SortArg = None,
+        limit: Annotated[
+            int, Field(ge=1, le=LIST_PAGE_MAX, description="Maximum contacts returned.")
+        ] = 50,
+    ) -> FindResult:
+        criteria = ContactFilter(
+            missing=tuple(missing or ()),
+            custom_fields_missing=tuple(custom_fields_missing or ()),
+            custom_fields_present=tuple(custom_fields_present or ()),
+            updated_before=updated_before,
+        )
+        if not criteria:
+            raise InvalidArgumentError(
+                "Give at least one criterion, or use list_contacts to list every contact."
+            )
+        keys = (*criteria.custom_fields_missing, *criteria.custom_fields_present)
+        if not all(folded(key) for key in keys):
+            raise InvalidArgumentError("Custom field keys must not be blank.")
+        return await _scan(
+            registry.resolve(account), criteria, SORT_ORDERS[sort] if sort else None, limit
         )
 
     @mcp.tool(

@@ -19,13 +19,14 @@ configuration are in the [README](../README.md).
 | `google/oauth.py` | Google OAuth URLs; `TokenProvider`: refresh via POST, access token in memory only, `invalid_grant` → `NeedsRelinkError` |
 | `google/people.py` | `PeopleClient`: one method per endpoint, raw JSON in and out; retries, 401 refresh, error mapping |
 | `models.py` | Pydantic tool inputs and outputs (all `extra="forbid"`), resource-name validators, `ListOps[T]` |
+| `contact_filter.py` | Pure matching of raw persons against the `find_contacts` criteria |
 | `normalize.py` | People API JSON → `ContactSummary` / `Contact` / `OtherContact` / `Group` (read direction); values from the person's Google profile listed as `from_profile` |
 | `accounts.py` | `AccountFileStore`: one JSON file per alias, written atomically, 0600 in a 0700 directory |
 | `registry.py` | `AccountRegistry` / `Account`: routing by alias, per-account mutation lock, search warm-up, group-name cache, `reload()` |
 | `linking.py` | The Google side of linking: PKCE, consent URL, code exchange and grant checks, revoke; shared by the CLI and the settings page |
 | `auth_cli.py` | `auth add / list / remove / set-read-only` |
 | `tools/_common.py` | Tool annotations, shared description notes, `write_attempt()` (account check, lock, audit) |
-| `tools/read.py` | `accounts`, `search_contacts`, `list_contacts`, `get_contact` |
+| `tools/read.py` | `accounts`, `search_contacts`, `list_contacts`, `find_contacts`, `get_contact` |
 | `tools/other.py` | `list_other_contacts`, `search_other_contacts` |
 | `tools/write.py` | `create_contact`, `update_contact`, `delete_contact`, `copy_other_contact_to_contacts`, `batch_create_contacts`, `batch_update_contacts` |
 | `tools/groups.py` | `list_groups`, `create_group`, `rename_group`, `delete_group`, `add_to_group`, `remove_from_group` |
@@ -118,6 +119,7 @@ third-party data, and the tool descriptions and server instructions say so.
 | `accounts` | read (openWorld false) | aliases, e-mails, read_only, status, what to do |
 | `search_contacts(query, account, limit=10)` | read | `people:searchContacts`, warm-up once per account; limit ≤ 30 |
 | `list_contacts(account, page_size=50, page_token, sort)` | read | `connections.list` with real pagination |
+| `find_contacts(account, missing, custom_fields_missing, custom_fields_present, updated_before, sort, limit=50)` | read | scans `connections.list`, returns the matches; see below |
 | `get_contact(resource_name, account, raw=false)` | read | full `Contact` with etag |
 | `list_groups(account)` | read | user and system groups with member counts |
 | `list_other_contacts(account, page_size, page_token)` | read | |
@@ -133,6 +135,13 @@ third-party data, and the tool descriptions and server instructions say so.
 | `delete_group(group, account, delete_contacts=false)` | destructive | user groups only; with `delete_contacts`, the audit line names every contact deleted |
 | `add_to_group(group, resource_names, account)` | write, idempotent | reads memberships first (`batchGet`), then `members:modify`; reports contacts already in the group |
 | `remove_from_group(group, resource_names, account)` | destructive, idempotent | reads memberships first (`batchGet`); reports contacts not in the group and `could_not_remove` |
+
+`find_contacts` exists because `connections.list` has no filter parameters: the filtering is ours,
+over pages of 1000 with `LISTING_FIELDS`. It saves the client from reading every contact, not
+Google calls. It returns no page token: it stops at the first match past `limit`, so `truncated`
+means another match exists (or the page cap, far beyond Google's contact limit, was hit), and
+exactly `limit` matches is reported complete. The first page of a full listing has a fixed Google
+quota; a 429 is retried like any other.
 
 `destructiveHint` is true wherever values can be removed, not only for deletes: the MCP spec
 reserves `false` for additive changes.
