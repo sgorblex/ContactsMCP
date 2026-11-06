@@ -8,7 +8,7 @@ the normalizer (:mod:`contacts_mcp.normalize`), not here.
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, ClassVar, Literal, Self
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, JsonValue, model_validator
 
@@ -331,19 +331,44 @@ class OtherContactSearchResult(Model):
 # case-insensitive text (the address's formatted text, the organization's name, the
 # relation's person, the custom field's key, the event's date as YYYY-MM-DD or --MM-DD). A
 # `remove` that matches nothing is an error. The update tools' descriptions say all this
-# once, rather than every field's schema repeating it.
+# once, rather than every field's schema repeating it. Custom fields add `set`: see
+# CustomFieldOps.
 class ListOps[T](Model):
+    _OP_NAMES: ClassVar[str] = "add, remove, replace_all, set_primary"
+
     add: list[T] = Field(default_factory=list)
     remove: list[str] = Field(default_factory=list)
     replace_all: list[T] | None = None
     set_primary: str | None = None
 
+    def _no_ops(self) -> bool:
+        return self.replace_all is None and not (self.add or self.remove or self.set_primary)
+
     @model_validator(mode="after")
     def _consistent(self) -> Self:
         if self.replace_all is not None and (self.add or self.remove):
             raise ValueError("use replace_all alone, or add/remove, not both")
-        if self.replace_all is None and not (self.add or self.remove or self.set_primary):
-            raise ValueError("give at least one of add, remove, replace_all, set_primary")
+        if self._no_ops():
+            raise ValueError(f"give at least one of {self._OP_NAMES}")
+        return self
+
+
+# Custom fields also take `set`, because a key usually holds one value: it replaces that
+# value (every value, if the key is repeated) or adds the key if it is new. `add` stays
+# append-only, since a repeated key is legal and `add` must not overwrite. A comment, not a
+# docstring: pydantic would copy a docstring into every tool schema using this model.
+class CustomFieldOps(ListOps[UserDefined]):
+    _OP_NAMES: ClassVar[str] = "add, remove, replace_all, set, set_primary"
+
+    set: list[UserDefined] = Field(default_factory=list)
+
+    def _no_ops(self) -> bool:
+        return super()._no_ops() and not self.set
+
+    @model_validator(mode="after")
+    def _set_alone(self) -> Self:
+        if self.set and (self.replace_all is not None or self.set_primary is not None):
+            raise ValueError("set goes without replace_all and set_primary")
         return self
 
 

@@ -37,7 +37,7 @@ once. Contact records carry their account's alias.
 | `list_other_contacts` | read | The "Other contacts" Google collects automatically (people you e-mailed). |
 | `search_other_contacts` | read | Search "Other contacts". |
 | `create_contact` | write | Create a contact: names, nicknames, e-mails, phones, organizations, addresses, birthday, notes, URLs, relations, events, custom fields, labels. |
-| `update_contact` | destructive | Edit a contact. Only what you ask changes: existing values are removed only by an explicit `remove`, `replace_all` or `clear`, or replaced by a new `birthday` or `biography` (which is why it is marked destructive). Multi-valued fields take explicit `add`, `remove`, `replace_all` and `set_primary`; the result lists before and after for each touched field. |
+| `update_contact` | destructive | Edit a contact. Only what you ask changes: existing values are removed only by an explicit `remove`, `replace_all` or `clear`, or replaced by a new `birthday` or `biography` or a custom field `set` (which is why it is marked destructive). Multi-valued fields take explicit `add`, `remove`, `replace_all` and `set_primary`, and custom fields also `set`, which replaces the value of a key (matched case-insensitively; every value, if the key is repeated) or adds it; the result lists before and after for each touched field. |
 | `copy_other_contact_to_contacts` | write | Promote an "Other contact" to a real contact. |
 | `batch_create_contacts` | write | Create up to 200 contacts in one call; any Google refuses are listed in `failures`. |
 | `batch_update_contacts` | destructive | Update up to 200 contacts with the same rules as `update_contact`; any Google refuses are listed in `failures`. |

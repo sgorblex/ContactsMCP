@@ -34,6 +34,7 @@ from contacts_mcp.models import (
     ClearableField,
     Contact,
     ContactSummary,
+    CustomFieldOps,
     DeleteResult,
     Email,
     Event,
@@ -85,9 +86,13 @@ OPS_NOTE = (
     "by person, custom fields by key, events by date (YYYY-MM-DD or --MM-DD), nicknames and "
     "URLs by trimmed case-insensitive text. A remove that matches nothing is an error and "
     "nothing is written. add of an e-mail, phone or URL already there with another type "
-    "changes its type. Dates need a year or a month, and a day needs a month. name changes "
-    "only the parts given; birthday and biography replace; clear empties name, birthday or "
-    "biography."
+    "changes its type. user_defined also takes set: [{key, value}], which replaces the "
+    "value of a key (every value, if the key is repeated) or adds the key if it is new, "
+    "while add appends another value even if the key exists. set matches keys like remove "
+    "does, trimmed and case-insensitively, goes without replace_all and set_primary, and "
+    "its keys may not also be in add or remove. Dates need a year or a month, "
+    "and a day needs a month. name changes only the parts given; birthday and biography "
+    "replace; clear empties name, birthday or biography."
 )
 
 
@@ -361,7 +366,7 @@ def register(mcp: FastMCP, registry: AccountRegistry) -> None:
         urls: ListOps[Url] | None = None,
         relations: ListOps[Relation] | None = None,
         events: ListOps[Event] | None = None,
-        user_defined: ListOps[UserDefined] | None = None,
+        user_defined: CustomFieldOps | None = None,
         birthday: BirthdayArg = None,
         biography: BiographyArg = None,
         clear: Annotated[

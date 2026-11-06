@@ -134,7 +134,8 @@ member changes.
 
 Write-tool parameters are top-level arguments rather than one nested object, so clients render
 them well: `name: NameFields`, `nicknames`, `emails: ListOps[Email]`, `phones: ListOps[Phone]`,
-`organizations`, `addresses`, `urls`, `relations`, `events`, `user_defined` (all `ListOps`),
+`organizations`, `addresses`, `urls`, `relations`, `events` (all `ListOps`), `user_defined`
+(`CustomFieldOps`, a `ListOps` with `set`),
 `birthday: PartialDate`, `biography: str`, `clear: list["name" | "birthday" | "biography"]`.
 `create_contact` takes plain lists instead of `ListOps`.
 
@@ -145,7 +146,7 @@ Pure functions, no I/O; the tool does fetch → apply → send → retry.
 1. Fetch the person with `PERSON_FIELDS` (it carries the `etag`).
 2. For each field given, compute the new **raw** item list from the existing raw items. Existing
    items are kept verbatim (their `metadata`, `formattedType`, unknown sub-fields), except for the
-   type change below; new ones are built from the models.
+   type change and the `set` of a value below; new ones are built from the models.
    - `remove` matches by normalized value: e-mails case-insensitively, phone numbers by digits
      (of the value or its canonical form), other fields by their trimmed, case-insensitive key
      (see `ListOps`). Every `remove` value must match at least one item, else
@@ -154,6 +155,13 @@ Pure functions, no I/O; the tool does fetch → apply → send → retry.
      it comes with a different `type`: then the contact's item takes the new type, and the change
      is reported. Other fields (organizations, addresses, relations, events, custom fields) are
      appended as given.
+   - `set` (custom fields only) runs after `remove` and `add`, and goes without `replace_all` and
+     `set_primary`. The key's first own item takes the value and keeps its place, metadata and key
+     spelling; later items with that key go, as `remove` matches them all; a new key is appended.
+     A key may appear once, and not also in `add` or `remove`. Repeating a `set` writes nothing,
+     so it is safe to retry; `add` is not, which is why `add` itself does not upsert. A key only
+     a Google profile holds is left alone, and the contact gets its own item beside it: unlike
+     `remove`, `set` has a result it can reach, so it doesn't refuse.
    - `set_primary` must match exactly one item, which moves first and gets `metadata.primary` and
      `metadata.sourcePrimary` true (`sourcePrimary` is what Google honours on writes; `primary` is
      output-only); any other item flagged primary is unflagged.
