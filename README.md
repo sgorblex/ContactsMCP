@@ -31,8 +31,8 @@ once. Contact records carry their account's alias.
 | --- | --- | --- |
 | `accounts` | read | Linked accounts: alias, e-mail, read-only flag, status (ok, needs re-link, unreadable). Call it first. |
 | `search_contacts` | read | Search contacts by name, e-mail, phone or organization (`people:searchContacts`). Compact results. |
-| `list_contacts` | read | Page through all contacts, with sorting. |
-| `get_contact` | read | One contact in full, with its `etag`. |
+| `list_contacts` | read | Page through all contacts, with sorting. Summaries include the last change, whether there are notes, and a count of values. |
+| `get_contact` | read | One contact in full, with its `etag` and last change. |
 | `list_groups` | read | Contact groups (labels), user and system, with member counts. |
 | `list_other_contacts` | read | The "Other contacts" Google collects automatically (people you e-mailed). |
 | `search_other_contacts` | read | Search "Other contacts". |

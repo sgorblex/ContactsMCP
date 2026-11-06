@@ -98,7 +98,17 @@ per-account failures (unusable accounts included) are reported in `failures` ins
 the call.
 
 List and search tools return compact summaries (resource name, display name, primary e-mail and
-phone, organization, groups); `get_contact` returns the full normalized record with its `etag`.
+phone, organization, groups); `get_contact` returns the full normalized record with its `etag` and
+`updated_at`. Summaries from listings also carry `updated_at`, `has_notes` and `field_count`, which
+need the wider `LISTING_FIELDS` mask. Elsewhere they stay `null`, not a false negative.
+`has_notes` and `field_count` describe the contact's own data: values from the person's Google
+profile don't count.
+
+`updated_at` is the latest `updateTime` of the person's `CONTACT` sources. Google's last-modified
+sort reacts to any write, custom fields included, with a lag of up to a few minutes, so treat both
+as "last touched", not "last meaningful edit". `metadata` is read through `READ_FIELDS` and
+`LISTING_FIELDS`, never `PERSON_FIELDS`, because `WRITABLE_FIELDS` derives from that one.
+
 People API `metadata`/`source` noise is stripped unless `raw` is asked for. Every returned string
 goes through `sanitize.clean()`: contact text, and *Other contacts* above all, is untrusted
 third-party data, and the tool descriptions and server instructions say so.

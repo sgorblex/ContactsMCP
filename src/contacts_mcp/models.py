@@ -177,6 +177,21 @@ class ContactSummary(Model):
     phone: str | None = Field(default=None, description="Primary phone number.")
     organization: str | None = Field(default=None, description="'Title, Company' of the primary.")
     groups: list[str] = Field(default_factory=list, description="Contact group (label) names.")
+    updated_at: str | None = Field(
+        default=None, description="When the contact last changed (RFC 3339). Listings only."
+    )
+    has_notes: bool | None = Field(
+        default=None,
+        description="Whether it has notes of its own, not a Google profile bio. Listings only.",
+    )
+    field_count: int | None = Field(
+        default=None,
+        description=(
+            "How many values it holds besides name, groups and photo: e-mails, phones, "
+            "organizations, addresses, birthday, notes, URLs, relations, events, custom fields, "
+            "nicknames. Google profile values don't count. Listings only."
+        ),
+    )
 
 
 class Contact(Model):
@@ -185,6 +200,9 @@ class Contact(Model):
     resource_name: str
     etag: str | None = None
     account: str | None = None
+    updated_at: str | None = Field(
+        default=None, description="When the contact last changed (RFC 3339). get_contact only."
+    )
     name: Name | None = None
     nicknames: list[str] = Field(default_factory=list)
     emails: list[Email] = Field(default_factory=list)

@@ -13,6 +13,7 @@ import respx
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
+from contacts_mcp.fields import PERSON_FIELDS, WRITABLE_FIELDS
 from contacts_mcp.google.oauth import TOKEN_URL
 from contacts_mcp.registry import AccountRegistry
 from contacts_mcp.tools._common import SEARCH_LAG_NOTE, UNTRUSTED_NOTE
@@ -155,6 +156,9 @@ async def test_search_returns_compact_summaries(
                 "phone": "+39 333 1234567",
                 "organization": "Programmer, Analytical Engines",
                 "groups": ["Family"],
+                "updated_at": None,
+                "has_notes": None,
+                "field_count": None,
             }
         ],
         "failures": [],
@@ -521,6 +525,51 @@ async def test_get_contact_is_full_and_has_the_etag(
     assert "metadata" not in json.dumps(contact)
     fields = route.calls.last.request.url.params["personFields"].split(",")
     assert {"names", "emailAddresses", "birthdays", "memberships", "userDefined"} <= set(fields)
+
+
+async def test_get_contact_asks_for_metadata_and_shows_the_update_time(
+    google: respx.MockRouter, make_registry: MakeRegistry, make_client: MakeClient
+) -> None:
+    source = {"type": "CONTACT", "updateTime": "2024-05-06T07:08:09Z"}
+    route = google.get(f"{PEOPLE}/people/c1").respond(
+        200, json=person(metadata={"sources": [source]})
+    )
+    async with make_client(make_registry("work")) as client:
+        contact = await call(client, "get_contact", resource_name="people/c1")
+    assert contact["updated_at"] == "2024-05-06T07:08:09Z"
+    assert "metadata" in route.calls.last.request.url.params["personFields"].split(",")
+
+
+async def test_list_summaries_have_the_details(
+    google: respx.MockRouter, make_registry: MakeRegistry, make_client: MakeClient
+) -> None:
+    source = {"type": "CONTACT", "updateTime": "2024-05-06T07:08:09Z"}
+    route = google.get(f"{PEOPLE}/people/me/connections").respond(
+        200,
+        json={
+            "connections": [
+                person(
+                    metadata={"sources": [source]},
+                    emails=["a@x.io"],
+                    biographies=[{"value": "Notes"}],
+                )
+            ]
+        },
+    )
+    async with make_client(make_registry("work")) as client:
+        result = await call(client, "list_contacts")
+    summary = result["contacts"][0]
+    assert summary["updated_at"] == "2024-05-06T07:08:09Z"
+    assert summary["has_notes"] is True
+    assert summary["field_count"] == 2
+    asked = route.calls.last.request.url.params["personFields"].split(",")
+    assert {"metadata", "biographies", "userDefined"} <= set(asked)
+    assert "photos" not in asked
+
+
+def test_metadata_is_never_a_writable_field() -> None:
+    assert "metadata" not in PERSON_FIELDS
+    assert "metadata" not in WRITABLE_FIELDS
 
 
 async def test_get_contact_raw_includes_the_person_object(

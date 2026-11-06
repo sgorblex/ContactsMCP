@@ -11,7 +11,7 @@ SCOPES: Final = (
     "https://www.googleapis.com/auth/contacts.other.readonly",
 )
 
-#: Every person field this server reads and writes (``personFields`` on reads).
+#: Every person field this server writes and reads back (``personFields`` on writes).
 PERSON_FIELDS: Final = (
     "names",
     "nicknames",
@@ -29,7 +29,14 @@ PERSON_FIELDS: Final = (
     "photos",
 )
 
-#: The subset a summary needs (list and search results).
+#: ``personFields`` of ``get_contact``. ``metadata`` stays out of ``PERSON_FIELDS``: it is
+#: read-only, and the write path neither needs it nor may treat it as writable.
+READ_FIELDS: Final = (*PERSON_FIELDS, "metadata")
+
+#: ``personFields`` of listings, whose summaries add the details only a full read can tell.
+LISTING_FIELDS: Final = (*(f for f in PERSON_FIELDS if f != "photos"), "metadata")
+
+#: The subset a plain summary needs (search and write results).
 SUMMARY_FIELDS: Final = (
     "names",
     "emailAddresses",
