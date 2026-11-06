@@ -41,6 +41,11 @@ def _s(value: Any) -> str | None:
     return value or None
 
 
+def folded(value: Any) -> str:
+    """Trimmed, whitespace-collapsed, case-folded text ('' for a non-string)."""
+    return " ".join(value.split()).casefold() if isinstance(value, str) else ""
+
+
 def _id(value: Any) -> str:
     """A Google identifier (resource name, etag), cleaned like any other returned string."""
     return clean(value) if isinstance(value, str) else ""

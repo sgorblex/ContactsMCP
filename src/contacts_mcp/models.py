@@ -275,6 +275,15 @@ class ContactList(Model):
     total_items: int | None = None
 
 
+class FindResult(Model):
+    contacts: list[ContactSummary]
+    scanned: int = Field(description="How many contacts were looked at.")
+    total_items: int | None = Field(default=None, description="Google's count of all contacts.")
+    truncated: bool = Field(
+        description="More contacts may match: raise `limit` or narrow the criteria."
+    )
+
+
 class SearchResult(Model):
     contacts: list[ContactSummary]
     failures: list[AccountFailure] = Field(
@@ -391,6 +400,10 @@ class CustomFieldOps(ListOps[UserDefined]):
 
 
 ClearableField = Literal["name", "birthday", "biography"]
+
+#: What ``find_contacts`` can look for the absence of. ``groups`` means no label: myContacts
+#: and starred are not labels. ``notes`` means no notes of the contact's own.
+MissingField = Literal["email", "phone", "organization", "address", "birthday", "notes", "groups"]
 
 
 def json_dump(model: BaseModel | None) -> Any:

@@ -17,13 +17,14 @@ from contacts_mcp.fields import PERSON_FIELDS, WRITABLE_FIELDS
 from contacts_mcp.google.oauth import TOKEN_URL
 from contacts_mcp.registry import AccountRegistry
 from contacts_mcp.tools._common import SEARCH_LAG_NOTE, UNTRUSTED_NOTE
+from contacts_mcp.tools.read import MAX_SCAN_PAGES
 from tests._read_support import bearer, by_account, call, per_account_tokens, requests_to
 from tests.conftest import PEOPLE, FakeStore, person
 
 type MakeRegistry = Callable[..., AccountRegistry]
 type MakeClient = Callable[[AccountRegistry], Client[Any]]
 
-READ_TOOLS = ("accounts", "search_contacts", "list_contacts", "get_contact")
+READ_TOOLS = ("accounts", "search_contacts", "list_contacts", "find_contacts", "get_contact")
 
 
 @pytest.fixture(autouse=True)
@@ -525,6 +526,148 @@ async def test_get_contact_is_full_and_has_the_etag(
     assert "metadata" not in json.dumps(contact)
     fields = route.calls.last.request.url.params["personFields"].split(",")
     assert {"names", "emailAddresses", "birthdays", "memberships", "userDefined"} <= set(fields)
+
+
+# --- find_contacts ----------------------------------------------------------------------
+
+
+def pages(*bodies: dict[str, Any]) -> Callable[[httpx.Request], httpx.Response]:
+    """Answer each page token with the next body (the first page has no token)."""
+    by_token = {
+        (f"page-{n}" if n else None): httpx.Response(200, json=body)
+        for n, body in enumerate(bodies)
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return by_token[request.url.params.get("pageToken")]
+
+    return respond
+
+
+async def test_find_scans_every_page_and_returns_only_matches(
+    google: respx.MockRouter, make_registry: MakeRegistry, make_client: MakeClient
+) -> None:
+    route = google.get(f"{PEOPLE}/people/me/connections").mock(
+        side_effect=pages(
+            {
+                "connections": [person("people/c1", emails=["a@x.io"]), person("people/c2")],
+                "nextPageToken": "page-1",
+                "totalItems": 3,
+            },
+            {"connections": [person("people/c3")], "totalItems": 3},
+        )
+    )
+    async with make_client(make_registry("work")) as client:
+        result = await call(
+            client, "find_contacts", missing=["email"], sort="last_modified_ascending"
+        )
+    assert [c["resource_name"] for c in result["contacts"]] == ["people/c2", "people/c3"]
+    assert result["contacts"][0]["account"] == "work"
+    assert result["contacts"][0]["field_count"] == 0
+    assert (result["scanned"], result["total_items"], result["truncated"]) == (3, 3, False)
+    params = route.calls[0].request.url.params
+    assert params["pageSize"] == "1000"
+    assert params["sortOrder"] == "LAST_MODIFIED_ASCENDING"
+    assert "metadata" in params["personFields"].split(",")
+    assert route.calls[1].request.url.params["pageToken"] == "page-1"
+
+
+async def test_find_stops_at_the_first_match_past_the_limit(
+    google: respx.MockRouter, make_registry: MakeRegistry, make_client: MakeClient
+) -> None:
+    route = google.get(f"{PEOPLE}/people/me/connections").mock(
+        side_effect=pages(
+            {
+                "connections": [person(f"people/c{n}") for n in range(3)],
+                "nextPageToken": "page-1",
+            },
+            {"connections": [person("people/c9")]},
+        )
+    )
+    async with make_client(make_registry("work")) as client:
+        result = await call(client, "find_contacts", missing=["email"], limit=2)
+    assert len(result["contacts"]) == 2
+    assert result["truncated"] is True
+    assert result["scanned"] == 3
+    assert route.call_count == 1
+
+
+async def test_find_with_exactly_limit_matches_is_complete(
+    google: respx.MockRouter, make_registry: MakeRegistry, make_client: MakeClient
+) -> None:
+    google.get(f"{PEOPLE}/people/me/connections").respond(
+        200, json={"connections": [person("people/c1"), person("people/c2")]}
+    )
+    async with make_client(make_registry("work")) as client:
+        result = await call(client, "find_contacts", missing=["email"], limit=2)
+    assert len(result["contacts"]) == 2
+    assert result["truncated"] is False
+
+
+async def test_find_reports_truncated_at_the_page_cap(
+    google: respx.MockRouter, make_registry: MakeRegistry, make_client: MakeClient
+) -> None:
+    route = google.get(f"{PEOPLE}/people/me/connections").respond(
+        200, json={"connections": [], "nextPageToken": "again"}
+    )
+    async with make_client(make_registry("work")) as client:
+        result = await call(client, "find_contacts", missing=["email"])
+    assert result["truncated"] is True
+    assert route.call_count == MAX_SCAN_PAGES
+
+
+async def test_find_needs_a_criterion(
+    google: respx.MockRouter, make_registry: MakeRegistry, make_client: MakeClient
+) -> None:
+    route = google.get(f"{PEOPLE}/people/me/connections").respond(200, json={})
+    async with make_client(make_registry("work")) as client:
+        with pytest.raises(ToolError, match="at least one criterion"):
+            await call(client, "find_contacts", missing=[], sort="first_name")
+    assert not route.called
+
+
+@pytest.mark.parametrize("field", ["custom_fields_missing", "custom_fields_present"])
+async def test_find_refuses_a_blank_custom_field_key(
+    field: str, google: respx.MockRouter, make_registry: MakeRegistry, make_client: MakeClient
+) -> None:
+    route = google.get(f"{PEOPLE}/people/me/connections").respond(200, json={})
+    async with make_client(make_registry("work")) as client:
+        with pytest.raises(ToolError, match="must not be blank"):
+            await call(client, "find_contacts", **{field: ["  "]})
+    assert not route.called
+
+
+async def test_find_refuses_bad_arguments(
+    make_registry: MakeRegistry, make_client: MakeClient
+) -> None:
+    async with make_client(make_registry("work")) as client:
+        for args in (
+            {"missing": ["hair"]},
+            {"missing": ["email"], "limit": 0},
+            {"missing": ["email"], "limit": 1001},
+            {"updated_before": "yesterday"},
+        ):
+            with pytest.raises(ToolError):
+                await call(client, "find_contacts", **args)
+
+
+async def test_find_by_date_comes_through_the_tool(
+    google: respx.MockRouter, make_registry: MakeRegistry, make_client: MakeClient
+) -> None:
+    old = {"type": "CONTACT", "updateTime": "2020-01-01T00:00:00Z"}
+    new = {"type": "CONTACT", "updateTime": "2026-01-01T00:00:00Z"}
+    google.get(f"{PEOPLE}/people/me/connections").respond(
+        200,
+        json={
+            "connections": [
+                person("people/c1", metadata={"sources": [old]}),
+                person("people/c2", metadata={"sources": [new]}),
+            ]
+        },
+    )
+    async with make_client(make_registry("work")) as client:
+        result = await call(client, "find_contacts", updated_before="2024-01-01")
+    assert [c["resource_name"] for c in result["contacts"]] == ["people/c1"]
 
 
 async def test_get_contact_asks_for_metadata_and_shows_the_update_time(

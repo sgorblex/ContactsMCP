@@ -165,6 +165,15 @@ async def run_checks(
     after = await call(client, "get_contact", resource_name=resource_name, account=account)
     check(after.get("user_defined") == [{"key": "smoke", "value": "second"}], "value replaced")
 
+    step("find_contacts: by the custom field just set")
+    found = await call(
+        client, "find_contacts", account=account, custom_fields_present=["smoke"], limit=1000
+    )
+    check(
+        any(c.get("resource_name") == resource_name for c in found.get("contacts", [])),
+        "contact found",
+    )
+
     step("create_group + add_to_group")
     group = await call(client, "create_group", account=account, name=f"smoke-{token}")
     group_name = str(group["resource_name"])
