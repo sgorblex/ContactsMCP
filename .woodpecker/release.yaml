@@ -1,9 +1,9 @@
 # Optional: release to a self-hosted registry and deploy over SSH, for Woodpecker CI. The GitHub
-# Actions release (GHCR) runs either way. A `v*` tag builds the image for the agent's
-# architecture, pushes :<version> and the moving :production tag, then deploys. Configuration is
-# all in repo secrets (README, "Releasing to your own registry"). Needs the repo marked "trusted"
-# on the Woodpecker server for the docker socket volume. Without a deploy target, drop the deploy
-# step.
+# Actions release (GHCR) runs either way. A `v*` tag builds the image for the server's platform,
+# pushes :<version> and the moving :production tag, deploys, and waits for the service to answer.
+# Configuration is all in repo secrets (README, "Releasing to your own registry"). Needs the repo
+# marked "trusted" on the Woodpecker server for the docker socket volume. Without a deploy target,
+# drop the deploy step.
 when:
   - event: tag
     ref: refs/tags/v*
@@ -22,6 +22,8 @@ steps:
         from_secret: registry_password
       REGISTRY_IMAGE:
         from_secret: registry_image
+      IMAGE_PLATFORM:
+        from_secret: image_platform
     commands:
       - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
       # The scripts are bash; docker:29-cli ships busybox ash only.
@@ -47,6 +49,8 @@ steps:
         from_secret: deploy_known_hosts
       DEPLOY_UNIT:
         from_secret: deploy_unit
+      DEPLOY_HEALTH_URL:
+        from_secret: deploy_health_url
     commands:
-      - apk add --no-cache bash openssh-client
+      - apk add --no-cache bash curl openssh-client
       - scripts/ssh-deploy.sh

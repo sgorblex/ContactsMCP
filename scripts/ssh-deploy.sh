@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Pull :production on the server and restart the unit, over SSH. Called by
+# Pull :production on the server and restart the unit, over SSH, then wait for the service to
+# answer: a restart succeeds even if the new container dies a second later. Called by
 # .woodpecker/release.yaml after release-push.sh. The remote commands are fixed, so a restricted
 # deploy user can be allowed exactly these three in sudoers (README, "Releasing to your own
 # registry"). A pre-release moves no :production tag, so there is nothing to deploy.
@@ -19,6 +20,7 @@ fi
 : "${DEPLOY_SSH_KEY:?DEPLOY_SSH_KEY must be set (private key contents)}"
 : "${DEPLOY_KNOWN_HOSTS:?DEPLOY_KNOWN_HOSTS must be set (the host key line)}"
 : "${DEPLOY_UNIT:?DEPLOY_UNIT must be set (systemd unit to restart)}"
+: "${DEPLOY_HEALTH_URL:?DEPLOY_HEALTH_URL must be set (the public /healthz URL)}"
 
 keyfile="$(mktemp)"
 knownhosts="$(mktemp)"
@@ -36,3 +38,14 @@ remote_cmd="sudo podman login '${REGISTRY}' -u '${REGISTRY_USER}' --password-std
 # The registry password goes over stdin, never on a command line.
 ssh -i "$keyfile" -o UserKnownHostsFile="$knownhosts" -o StrictHostKeyChecking=yes \
   "$DEPLOY_HOST" "$remote_cmd" <<< "$REGISTRY_PASSWORD"
+
+# Long enough for the image's healthcheck to pass and the proxy to route to the new container.
+for _ in {1..36}; do
+  if curl --fail --silent --show-error --max-time 5 --output /dev/null "$DEPLOY_HEALTH_URL"; then
+    echo "ssh-deploy: $DEPLOY_HEALTH_URL is healthy"
+    exit 0
+  fi
+  sleep 5
+done
+echo "ssh-deploy: $DEPLOY_HEALTH_URL did not become healthy after the restart" >&2
+exit 1
