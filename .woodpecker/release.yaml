@@ -1,9 +1,7 @@
-# Optional: release to a self-hosted registry and deploy over SSH, for Woodpecker CI. The GitHub
-# Actions release (GHCR) runs either way. A `v*` tag builds the image for the server's platform,
-# pushes :<version> and the moving :production tag, deploys, and waits for the service to answer.
-# Configuration is all in repo secrets (README, "Releasing to your own registry"). Needs the repo
-# marked "trusted" on the Woodpecker server for the docker socket volume. Without a deploy target,
-# drop the deploy step.
+# Optional: release to a self-hosted registry, for Woodpecker CI. The GitHub Actions release (GHCR)
+# runs either way. A `v*` tag builds the image for the server's platform and pushes :<version>;
+# deploying is left to the server (README, "Releasing to your own registry"). Needs the repo marked
+# "trusted" on the Woodpecker server for the docker socket volume.
 when:
   - event: tag
     ref: refs/tags/v*
@@ -29,28 +27,3 @@ steps:
       # The scripts are bash; docker:29-cli ships busybox ash only.
       - apk add --no-cache bash
       - scripts/release-push.sh
-
-  - name: deploy
-    image: alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
-    environment:
-      REGISTRY:
-        from_secret: registry
-      REGISTRY_USER:
-        from_secret: registry_user
-      REGISTRY_PASSWORD:
-        from_secret: registry_password
-      REGISTRY_IMAGE:
-        from_secret: registry_image
-      DEPLOY_HOST:
-        from_secret: deploy_host
-      DEPLOY_SSH_KEY:
-        from_secret: deploy_ssh_key
-      DEPLOY_KNOWN_HOSTS:
-        from_secret: deploy_known_hosts
-      DEPLOY_UNIT:
-        from_secret: deploy_unit
-      DEPLOY_HEALTH_URL:
-        from_secret: deploy_health_url
-    commands:
-      - apk add --no-cache bash curl openssh-client
-      - scripts/ssh-deploy.sh

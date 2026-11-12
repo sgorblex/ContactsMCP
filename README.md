@@ -510,11 +510,11 @@ stacked PRs and which docs to update with each change.
 [`.woodpecker/release.yaml`](.woodpecker/release.yaml) is an optional second release path for
 [Woodpecker CI](https://woodpecker-ci.org/). It does not replace the GHCR release, which runs
 either way. On each release tag it builds the image for your server's platform and pushes it to
-your registry as `:<version>` and `:production`. It then logs in to your server over SSH, pulls
-`:production`, restarts the service, and fails unless the service answers within three minutes,
-so the server's unit should run `:production`. A pre-release such as `1.2.0-rc.1` gets its version
-tag only and is not deployed. To roll back, point `:production` at an older version and restart
-the unit.
+your registry as `:<version>`, with `org.opencontainers.image.version` and `.revision` labels. It
+does not deploy: pin the version in your server's configuration and update it there, for example
+with [Renovate](https://docs.renovatebot.com/) watching your registry, so that the server pulls
+from the registry and CI needs no access to the server. A pre-release such as `1.2.0-rc.1` is
+pushed the same way; Renovate skips pre-releases by default.
 
 If the agent's architecture differs from `image_platform`, it needs QEMU emulation for that
 platform, otherwise the build fails before anything is pushed.
@@ -528,23 +528,6 @@ socket. Everything else is configured with repository secrets:
 | `registry_user`, `registry_password` | A registry user that can push |
 | `registry_image` | Image path in the registry, e.g. `contacts/mcp` |
 | `image_platform` | The server's platform, e.g. `linux/arm64` |
-| `deploy_host` | `user@host` to deploy as, e.g. `deploy@contacts.example.com` |
-| `deploy_ssh_key` | The private half of that user's SSH key |
-| `deploy_known_hosts` | The server's host key line, as in `known_hosts` |
-| `deploy_unit` | The systemd unit to restart, e.g. `contacts-mcp` |
-| `deploy_health_url` | The public health URL, e.g. `https://contacts.example.com/healthz` |
-
-Restrict the deploy SSH key with `restrict` in its `authorized_keys`, and allow the deploy user
-exactly these three commands in sudoers (with your values, and absolute paths to `podman` and
-`systemctl`):
-
-```
-sudo podman login '<registry>' -u '<registry_user>' --password-stdin
-sudo podman pull '<registry>/<registry_image>:production'
-sudo systemctl restart '<deploy_unit>'
-```
-
-If you only want the image pushed, without the SSH deploy, delete the `deploy` step.
 
 ## License
 
