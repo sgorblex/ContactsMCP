@@ -509,27 +509,22 @@ stacked PRs and which docs to update with each change.
 
 [`.woodpecker/release.yaml`](.woodpecker/release.yaml) is an optional second release path for
 [Woodpecker CI](https://woodpecker-ci.org/). It does not replace the GHCR release, which runs
-either way. On each release tag it builds the image for your server's platform and pushes it to
-your registry as `:<version>`, with `org.opencontainers.image.version`, `.revision` and `.source` labels. It
-does not deploy: pin the version in your server's configuration and update it there, for example
-with [Renovate](https://docs.renovatebot.com/) watching your registry, so that the server pulls
-from the registry and CI needs no access to the server. A pre-release such as `1.2.0-rc.1` is
-pushed the same way; Renovate skips pre-releases by default.
+either way. On each release tag it builds the image for the server's platform (`linux/arm64`, on an
+agent of that platform) and pushes it to the registry as `:<version>`, with
+`org.opencontainers.image.version`, `.revision` and `.source` labels. It does not deploy: pin the
+version in your server's configuration and update it there, for example with
+[Renovate](https://docs.renovatebot.com/) watching your registry, so that the server pulls from the
+registry and CI needs no access to the server. A pre-release such as `1.2.0-rc.1` is pushed the same
+way; Renovate skips pre-releases by default. A manual run builds the image without pushing it.
 
-If the agent's architecture differs from `image_platform`, it needs QEMU emulation for that
-platform, otherwise the build fails before anything is pushed.
+The registry (`reg.aclerici.me/contacts/mcp`) and platform are written in the pipeline: to publish
+elsewhere, change them there. Only the login is secret, as the repository secrets
+`registry_user` and `registry_password` (a registry user that can push), for tag and manual events.
 
 The build runs in the `plugin-docker-buildx` plugin, so the repository does not need to be marked
 *trusted*. Instead, the Woodpecker server must allow that plugin to run privileged: set
 `WOODPECKER_PLUGINS_PRIVILEGED` to the exact image (tag and digest) used in the pipeline, and update
-both together. Everything else is configured with repository secrets:
-
-| Secret | Value |
-| --- | --- |
-| `registry` | Registry host, e.g. `registry.example.com` |
-| `registry_user`, `registry_password` | A registry user that can push |
-| `registry_repo` | Full image path, e.g. `registry.example.com/contacts/mcp` |
-| `image_platform` | The server's platform, e.g. `linux/arm64` |
+both together. BuildKit's layer cache is kept in the registry as `:buildcache`.
 
 ## License
 
