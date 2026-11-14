@@ -3,8 +3,10 @@
 # deploying is left to the server (README, "Releasing to your own registry"). A manual run builds
 # the same image without pushing it, to test the pipeline.
 #
-# No repo trust needed: the build runs in plugin-docker-buildx, which the Woodpecker server must
-# allow to run privileged (WOODPECKER_PLUGINS_PRIVILEGED) at exactly the tag@digest below. BuildKit's
+# No repo trust needed: the build runs in Woodpecker's buildx plugin, from oci's copy at
+# reg.aclerici.me/ci/buildx (same digests as upstream), whose every tag the server allows to run
+# privileged. Renovate proposes new tags once oci has copied them.
+# BuildKit's
 # cache lives in the registry as :buildcache. To publish elsewhere, change the registry, repo and
 # platform here; only the registry login is secret.
 labels:
@@ -17,7 +19,7 @@ when:
 
 steps:
   - name: build-push
-    image: docker.io/woodpeckerci/plugin-docker-buildx:6.1.2@sha256:d26b69cbe748b8a219c707e7889d5ffb3f9214bc3c480c30fe857ff85954267c
+    image: reg.aclerici.me/ci/buildx:6.1.2@sha256:d26b69cbe748b8a219c707e7889d5ffb3f9214bc3c480c30fe857ff85954267c
     when:
       - event: tag
     settings: &build
@@ -38,7 +40,7 @@ steps:
       cache_to: type=registry,ref=reg.aclerici.me/contacts/mcp:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
 
   - name: build-test
-    image: docker.io/woodpeckerci/plugin-docker-buildx:6.1.2@sha256:d26b69cbe748b8a219c707e7889d5ffb3f9214bc3c480c30fe857ff85954267c
+    image: reg.aclerici.me/ci/buildx:6.1.2@sha256:d26b69cbe748b8a219c707e7889d5ffb3f9214bc3c480c30fe857ff85954267c
     when:
       - event: manual
     settings:

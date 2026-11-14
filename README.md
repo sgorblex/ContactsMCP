@@ -521,10 +521,10 @@ The registry (`reg.aclerici.me/contacts/mcp`) and platform are written in the pi
 elsewhere, change them there. Only the login is secret, as the repository secrets
 `registry_user` and `registry_password` (a registry user that can push), for tag and manual events.
 
-The build runs in the `plugin-docker-buildx` plugin, so the repository does not need to be marked
-*trusted*. Instead, the Woodpecker server must allow that plugin to run privileged: set
-`WOODPECKER_PLUGINS_PRIVILEGED` to the exact image (tag and digest) used in the pipeline, and update
-both together. BuildKit's layer cache is kept in the registry as `:buildcache`.
+The build runs in Woodpecker's buildx plugin, so the repository does not need to be marked
+*trusted*. The pipeline uses the copy at `reg.aclerici.me/ci/buildx`, which the Woodpecker server
+allows to run privileged (`WOODPECKER_PLUGINS_PRIVILEGED`); Renovate proposes its new tags. On
+another Woodpecker server, point the image at one that server allows. BuildKit's layer cache is kept in the registry as `:buildcache`.
 
 ## License
 
