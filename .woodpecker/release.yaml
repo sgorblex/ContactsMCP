@@ -4,7 +4,7 @@
 # the same image without pushing it, to test the pipeline.
 #
 # No repo trust needed: the build runs in plugin-docker-buildx, which the Woodpecker server must
-# allow to run privileged (WOODPECKER_PLUGINS_PRIVILEGED) at exactly the tag@digest below. BuildKit's
+# allow to run privileged (WOODPECKER_PLUGINS_PRIVILEGED); by name, it admits any version. BuildKit's
 # cache lives in the registry as :buildcache. To publish elsewhere, change the registry, repo and
 # platform here; only the registry login is secret.
 labels:
