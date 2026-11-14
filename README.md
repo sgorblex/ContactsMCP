@@ -523,8 +523,10 @@ elsewhere, change them there. Only the login is secret, as the repository secret
 
 The build runs in the `plugin-docker-buildx` plugin, so the repository does not need to be marked
 *trusted*. Instead, the Woodpecker server must allow that plugin to run privileged: set
-`WOODPECKER_PLUGINS_PRIVILEGED` to the exact image (tag and digest) used in the pipeline, and update
-both together. BuildKit's layer cache is kept in the registry as `:buildcache`.
+`WOODPECKER_PLUGINS_PRIVILEGED` to the plugin's name, `docker.io/woodpeckerci/plugin-docker-buildx`,
+which admits any version, so the pin here can be bumped without touching the server. (An exact tag
+and digest works too, but then the two must be updated together.) BuildKit's layer cache is kept in
+the registry as `:buildcache`.
 
 ## License
 
