@@ -1,29 +1,42 @@
 # Optional: release to a self-hosted registry, for Woodpecker CI. The GitHub Actions release (GHCR)
 # runs either way. A `v*` tag builds the image for the server's platform and pushes :<version>;
-# deploying is left to the server (README, "Releasing to your own registry"). Needs the repo marked
-# "trusted" on the Woodpecker server for the docker socket volume.
+# deploying is left to the server (README, "Releasing to your own registry"). A manual run builds
+# the same image without pushing it, to test the pipeline.
+#
+# No repo trust needed: the build runs in plugin-docker-buildx, which the Woodpecker server must
+# allow to run privileged (WOODPECKER_PLUGINS_PRIVILEGED) at exactly the tag@digest below.
 when:
   - event: tag
     ref: refs/tags/v*
+  - event: manual
 
 steps:
   - name: build-push
-    image: docker:29-cli@sha256:1a4c7cb63513f349bdad01fcc6e0f3f2f67d37b9da86f14dc0d4a0942eecda00
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      REGISTRY:
+    image: docker.io/woodpeckerci/plugin-docker-buildx:6.1.2@sha256:d26b69cbe748b8a219c707e7889d5ffb3f9214bc3c480c30fe857ff85954267c
+    when:
+      - event: tag
+    settings: &build
+      registry:
         from_secret: registry
-      REGISTRY_USER:
+      username:
         from_secret: registry_user
-      REGISTRY_PASSWORD:
+      password:
         from_secret: registry_password
-      REGISTRY_IMAGE:
-        from_secret: registry_image
-      IMAGE_PLATFORM:
+      repo:
+        from_secret: registry_repo
+      tags: ${CI_COMMIT_TAG##v}
+      dockerfile: Containerfile
+      platforms:
         from_secret: image_platform
-    commands:
-      - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
-      # The scripts are bash; docker:29-cli ships busybox ash only.
-      - apk add --no-cache bash
-      - scripts/release-push.sh
+      # The plugin adds created, revision, source and url itself.
+      labels:
+        - org.opencontainers.image.version=${CI_COMMIT_TAG##v}
+
+  - name: build-test
+    image: docker.io/woodpeckerci/plugin-docker-buildx:6.1.2@sha256:d26b69cbe748b8a219c707e7889d5ffb3f9214bc3c480c30fe857ff85954267c
+    when:
+      - event: manual
+    settings:
+      <<: *build
+      tags: ci-test
+      dry_run: true
